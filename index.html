@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Alan Garcia — Productividad</title>
+
+<!-- PWA: instalación como app en móvil y escritorio -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f0f0f">
+<meta name="background-color" content="#0f0f0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Productividad">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- AUTH GATE: se muestra hasta que haya sesión iniciada con Supabase -->
+<div class="modal-overlay open" id="authGate" style="z-index:500;">
+  <div class="modal" style="width:380px;">
+    <div class="modal-title" id="authTitle">Iniciar sesión</div>
+
+    <div class="form-row" style="margin-bottom:10px;">
+      <div>
+        <label>Email</label>
+        <input type="email" id="authEmail" placeholder="tu@email.com" autocomplete="username">
+      </div>
+    </div>
+    <div class="form-row" style="margin-bottom:6px;">
+      <div>
+        <label>Contraseña</label>
+        <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password">
+      </div>
+    </div>
+
+    <div id="authError" style="font-size:11px;color:var(--red);min-height:14px;margin-bottom:10px;"></div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-accent" id="authSubmitBtn" onclick="handleAuthSubmit()">Iniciar sesión</button>
+      <button class="btn btn-sm" id="authToggleBtn" onclick="toggleAuthMode()">¿No tenés cuenta? Registrate</button>
+    </div>
+
+    <div style="font-size:10px;color:var(--text3);margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+      Cada persona tiene su propia cuenta y ve únicamente sus propias tareas, eventualidades y recordatorios.
+    </div>
+  </div>
+</div>
+
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-text">Gestor de Tareas</div>
+    <div class="logo-sub">Administración Stefani</div>
+  </div>
+  <div class="nav">
+    <div class="nav-section">Vistas</div>
+    <div class="nav-item active" onclick="showView('dashboard')">
+      <i class="icon">◈</i><span>Dashboard<span class="ATAJOS"> (alt+1)</span></span>
+    </div>
+    <div class="nav-item" onclick="showView('tasks')">
+      <i class="icon">≡</i><span>Tareas<span class="ATAJOS"> (alt+2)</span></span>
+    </div>
+    <div class="nav-item" onclick="showView('events')">
+      <i class="icon">⚡</i><span>Eventualidades<span class="ATAJOS"> (alt+3)</span></span>
+    </div>
+    <div class="nav-item" onclick="showView('calendar')">
+      <i class="icon">◫</i><span>Calendario<span class="ATAJOS"> (alt+4)</span></span>
+    </div>
+    <div class="nav-section">Extras</div>
+    <div class="nav-item" onclick="showView('reminders')">
+      <i class="icon">◎</i><span>Recordatorios<span class="ATAJOS"> (alt+5)</span></span>
+    </div>
+    <div class="nav-item" onclick="showView('analytics')">
+      <i class="icon">📊</i><span>Analytics<span class="ATAJOS"> (alt+6)</span></span>
+    </div>
+    <div class="nav-item" onclick="showView('log')">
+      <i class="icon">▤</i><span>Historial</span>
+    </div>
+    <div class="nav-item" onclick="showView('datos')">
+      <i class="icon">↓</i><span>Datos</span>
+    </div>
+  </div>
+  <div class="sidebar-time">
+    <div class="clock" id="clock">00:00</div>
+    <div class="date" id="dateLabel"></div>
+  </div>
+</nav>
+
+<!-- MAIN -->
+<div class="main">
+  
+  <div class="header">
+    
+    <div class="header-title" id="headerTitle">Dashboard</div>
+    <div class="header-actions">
+      <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
+      <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
+      <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con Supabase">⟲ Sincronizar</button>
+      <button class="btn btn-accent" onclick="openNewTaskModal()">+ Nueva tarea</button>
+      <button class="btn" onclick="openNewEventModal()">⚡ Eventualidad<span class="ATAJOS">F2</span></button>
+      <button id="themeToggle" class="btn">🌓 Tema</button>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="view active" id="view-dashboard">
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="section-head">
+      <div class="section-title">▶ En curso ahora</div>
+    </div>
+    <div id="activeTasksArea">
+      <div class="empty"><div class="empty-icon">⏸</div>Ninguna tarea en curso</div>
+    </div>
+
+    <div class="section-head" style="margin-top:28px;">
+      <div class="section-title">📅 Vencen hoy o mañana</div>
+    </div>
+    <div id="urgentTasksArea"></div>
+
+    <div class="section-head" style="margin-top:28px;">
+      <div class="section-title">◎ Recordatorios activos</div>
+      <button class="btn btn-sm" onclick="showView('reminders')">Ver todos</button>
+    </div>
+    <div id="dashReminders"></div>
+  </div>
+
+  <!-- TASKS -->
+  <div class="view" id="view-tasks">
+    <div class="section-head">
+      <div class="section-title">Tareas estándar <span class="count-badge" id="taskCount">0</span></div>
+      <div style="display:flex;gap:8px;">
+        <select id="filterFreq" onchange="renderTasks()" style="width:auto;padding:6px 10px;font-size:11px;">
+          <option value="">Todas las frecuencias</option>
+          <option value="daily">Diarias</option>
+          <option value="weekly">Semanales</option>
+          <option value="biweekly">Quincenales</option>
+          <option value="monthly">Mensuales</option>
+        </select>
+        <select id="filterStatus" onchange="renderTasks()" style="width:auto;padding:6px 10px;font-size:11px;">
+          <option value="">Hoy y futuras</option>
+          <option value="pending">Pendientes</option>
+          <option value="done">Completadas</option>
+          <option value="all">Todas</option>
+        </select>
+      </div>
+    </div>
+    <div id="taskList"></div>
+  </div>
+
+  <!-- EVENTS -->
+  <div class="view" id="view-events">
+    <div class="section-head">
+      <div class="section-title">Eventualidades / Conflictos <span class="count-badge" id="eventCount">0</span></div>
+      <div style="display:flex;gap:8px;">
+        <select id="eventStatus" onchange="renderEvents()" style="width:auto;padding:6px 10px;font-size:11px;">
+          <option value="pending">Pendientes</option>
+          <option value="done">Completadas</option>
+          <option value="all">Todas</option>
+        </select>
+      </div>
+    </div>
+    <div id="eventList"></div>
+  </div>
+
+  <!-- CALENDAR -->
+  <div class="view" id="view-calendar">
+    <div class="cal-nav">
+      <button class="btn btn-icon" onclick="changeMonth(-1)">◀</button>
+      <div class="cal-month" id="calTitle"></div>
+      <button class="btn btn-icon" onclick="changeMonth(1)">▶</button>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+    <div id="calDayDetail" style="margin-top:20px;"></div>
+  </div>
+
+  <!-- REMINDERS -->
+  <div class="view" id="view-reminders">
+    <div class="section-head">
+      <div class="section-title">Recordatorios</div>
+      <button class="btn btn-accent btn-sm" onclick="openReminderModal()">+ Agregar <span class="ATAJOS">(F3)</span></button>
+    </div>
+    <div id="reminderList"></div>
+  </div>
+
+  <!-- Analytics -->
+  <div class="view" id="view-analytics">
+
+    <div class="section-head" style="flex-wrap:wrap;gap:10px;">
+      <div class="section-title">📊 Analytics</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="margin:0;text-transform:none;font-size:11px;color:var(--text3);">Desde</label>
+          <input style="width:140px;" type="date" id="analyticsFrom">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="margin:0;text-transform:none;font-size:11px;color:var(--text3);">Hasta</label>
+          <input style="width:140px;" type="date" id="analyticsTo">
+        </div>
+        <button class="btn btn-accent btn-sm" onclick="applyAnalyticsFilter()">Aplicar filtro</button>
+        <button class="btn btn-sm" onclick="clearAnalyticsFilter()">Limpiar filtro</button>
+      </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="stats-grid" id="analyticsKpis" style="margin-bottom:16px;"></div>
+
+    <!-- Tarea destacada + Impacto Eventualidades -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;" id="analyticsHighlights"></div>
+
+    <!-- Top 10 -->
+    <div class="section-head" style="margin-top:8px;">
+      <div class="section-title">🏅 Top 10 — Tareas por tiempo invertido</div>
+    </div>
+    <div class="card" id="analyticsRanking" style="padding:0;overflow:hidden;"></div>
+
+    <!-- Charts row 1: Horas por tarea + Distribución -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:20px;">
+      <div class="card">
+        <div class="card-header"><div class="card-title">Horas por tarea</div></div>
+        <canvas id="chartByTask" height="220"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Distribución del tiempo</div></div>
+        <canvas id="chartPie" height="220"></canvas>
+      </div>
+    </div>
+
+    <!-- Charts row 2: Evolución diaria -->
+    <div class="card" style="margin-top:12px;">
+      <div class="card-header"><div class="card-title">Evolución diaria</div></div>
+      <canvas id="chartDaily" height="120"></canvas>
+    </div>
+
+    <!-- Charts row 3: Por frecuencia + Por día de semana -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;margin-bottom:24px;">
+      <div class="card">
+        <div class="card-header"><div class="card-title">Tiempo por frecuencia</div></div>
+        <canvas id="chartFreq" height="200"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Horas por día de semana</div></div>
+        <canvas id="chartWeekday" height="200"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- LOG -->
+  <div class="view" id="view-log">
+    <div class="section-head">
+      <div class="section-title">Historial de sesiones</div>
+      <button class="btn btn-sm btn-red" onclick="clearLog()">Limpiar</button>
+    </div>
+    <div class="card">
+      <div id="logList"></div>
+    </div>
+    <div class="section-head" style="margin-top:24px;">
+      <div class="section-title">Tiempo acumulado por tarea</div>
+    </div>
+    <div id="timeReport"></div>
+  </div>
+
+<!-- DATOS -->
+  <div class="view" id="view-datos">
+    <div class="section-head">
+      <div class="section-title">Gestión de datos</div>
+  </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">🔗 Sincronización (Supabase)</div>
+
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+        <span id="syncIndicatorDatos" style="font-size:12px;"></span>
+        <button class="btn btn-sm" onclick="manualSync()">⟲ Sincronizar ahora</button>
+      </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:10px;">
+          Sesión iniciada como <strong id="datosUserEmail">—</strong>. Tus datos están separados de los de tus compañeros automáticamente: cada uno ve solo lo suyo.
+        </div>
+        <button class="btn btn-red btn-sm" onclick="signOut()">Cerrar sesión</button>
+      </div>
+    </div>
+
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📦 Exportar</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-accent" onclick="exportJSON()">↓ Backup JSON (completo)</button>
+        <button class="btn" onclick="exportCSV()">↓ Exportar CSV (historial para Excel)</button>
+        <button class="btn" onclick="exportCSVTareas()">↓ Exportar CSV (tareas)</button>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:10px;">El JSON incluye tareas, eventualidades, recordatorios e historial. Usalo como backup o para restaurar en otra PC.</div>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📂 Importar</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label for="importFile" style="text-transform:none;font-size:12px;color:var(--text);margin-bottom:0;cursor:pointer;">
+          <span class="btn">↑ Seleccionar archivo JSON</span>
+        </label>
+        <input type="file" id="importFile" accept=".json" style="display:none" onchange="importJSON(this)">
+      </div>
+      <div style="font-size:11px;color:var(--red);margin-top:10px;">⚠ Importar reemplaza todos los datos actuales. Exportá primero como backup.</div>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px; display: none;">
+      <div style="font-size:10px;color:var(--red);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⚠ Zona de peligro</div>
+      <button class="btn btn-red" onclick="resetAll()">Borrar todos los datos</button>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⌨️ ATAJOS</div>
+      <div style="display:inline-block;gap:10px; width: auto;">
+        <span style="color: #555; display: flex;">F2<p style="color: #888; margin-left: 5px;"> - Nueva Eventualidad</p></span>
+        <span style="color: #555; display: flex;">F3<p style="color: #888; margin-left: 5px;"> - Nuevo Recordatorio</p></span>
+        <span style="color: #555; display: flex;">Alt+1<p style="color: #888; margin-left: 5px;"> - Panel Dashboard</p></span>
+        <span style="color: #555; display: flex;">Alt+2<p style="color: #888; margin-left: 5px;"> - Panel Tareas</p></span>
+        <span style="color: #555; display: flex;">Alt+3<p style="color: #888; margin-left: 5px;"> - Panel Eventualidades</p></span>
+        <span style="color: #555; display: flex;">Alt+4<p style="color: #888; margin-left: 5px;"> - Panel Calendario</p></span>
+        <span style="color: #555; display: flex;">Alt+5<p style="color: #888; margin-left: 5px;"> - Panel Recordatorios</p></span>
+        <span style="color: #555; display: flex;">Alt+6<p style="color: #888; margin-left: 5px;"> - Panel Analytics</p></span>
+        <span style="color: #555; display: flex;">Alt+Enter<p style="color: #888; margin-left: 5px;"> - Guardar Evento/Tarea/Recordatorio</p></span>
+        <span style="color: #555; display: flex;">Esc<p style="color: #888; margin-left: 5px;"> - Cerrar Popup Tarea/Eventualidad/Recordatorio</p></span>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:10px;">
+        <span>Ante cualquier inconveniente o sugerencia comunicarse con: <a style="color: #8aaa4a;" href="mailto:alan.garcia@rosariobus.com.ar?Subject=Productividad%20HTML">Alan Garcia</a></span>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+ 
+<!-- MODALS -->
+
+<!-- New Task Modal -->
+<div class="modal-overlay" id="newTaskModal">
+  <div class="modal">
+    <div class="modal-title">Nueva tarea estándar</div>
+    <div class="form-row">
+      <div>
+        <label>Nombre de la tarea</label>
+        <input type="text" id="nt-name" placeholder="Ej: Revisar reportes de ventas">
+      </div>
+    </div>
+    <div class="form-row cols2">
+      <div>
+        <label>Frecuencia</label>
+        <select id="nt-freq">
+          <option value="daily">Diaria</option>
+          <option value="weekly">Semanal</option>
+          <option value="biweekly">Quincenal</option>
+          <option value="monthly">Mensual</option>
+        </select>
+      </div>
+      <div>
+        <label>Próximo vencimiento</label>
+        <input type="date" id="nt-due">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Notas (opcional)</label>
+        <textarea id="nt-notes" placeholder="Descripción, contexto, links..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('newTaskModal')">Cancelar</button>
+      <button class="btn btn-accent" onclick="saveNewTask()">Guardar tarea</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Event Modal -->
+<div class="modal-overlay" id="newEventModal">
+  <div class="modal">
+    <div class="modal-title">Nueva eventualidad / conflicto</div>
+    <div class="form-row">
+      <div>
+        <label>Descripción</label>
+        <input type="text" id="ne-name" placeholder="Ej: Bug crítico en producción">
+      </div>
+    </div>
+    <div class="form-row cols2">
+      <div>
+        <label>Prioridad</label>
+        <select id="ne-prio">
+          <option value="high">🔴 Alta</option>
+          <option value="medium">🟡 Media</option>
+          <option value="low">🟢 Baja</option>
+        </select>
+      </div>
+      <div>
+        <label>Fecha</label>
+        <input type="date" id="ne-date">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Notas</label>
+        <textarea id="ne-notes" placeholder="Contexto del problema..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('newEventModal')">Cancelar</button>
+      <button class="btn btn-accent" onclick="saveNewEvent()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reminder Modal -->
+<div class="modal-overlay" id="reminderModal">
+  <div class="modal">
+    <div class="modal-title">Nuevo recordatorio</div>
+    <div class="form-row">
+      <div>
+        <label>Texto del recordatorio</label>
+        <input type="text" id="rm-text" placeholder="Ej: Llamar al proveedor antes de las 16hs">
+      </div>
+    </div>
+    <div class="form-row cols2">
+      <div>
+        <label>Fecha</label>
+        <input type="date" id="rm-date">
+      </div>
+      <div>
+        <label>Hora (opcional)</label>
+        <input type="time" id="rm-time">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('reminderModal')">Cancelar</button>
+      <button class="btn btn-accent" onclick="saveReminder()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+ 
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="index.js"></script>
+
+<script>
+// Registro del Service Worker (habilita instalación + modo offline)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(err => {
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
+}
+
+// Accesos directos del manifest: "Nueva tarea" / "Nueva eventualidad"
+// desde el ícono de la app (mantener presionado en Android/desktop)
+window.addEventListener('load', () => {
+  const params = new URLSearchParams(window.location.search);
+  const action = params.get('action');
+  if (action === 'new-task' && typeof openNewTaskModal === 'function') openNewTaskModal();
+  if (action === 'new-event' && typeof openNewEventModal === 'function') openNewEventModal();
+});
+</script>
+
+</body>
+</html>
