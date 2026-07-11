@@ -38,8 +38,8 @@ let state = {
 // están pensados para ir embebidos en el código del cliente). Lo que
 // protege los datos de cada usuario es la Row Level Security definida
 // en schema.sql, no ocultar estos valores.
-const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
-const SUPABASE_ANON_KEY = 'TU-ANON-KEY';
+const SUPABASE_URL = 'https://scfeluwbaanzxataizbz.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_slMXuckeD-_SWT6T7OLfBA_bg0pe5V8';
 
 const supabaseClient = (SUPABASE_URL.includes('TU-PROYECTO'))
   ? null
