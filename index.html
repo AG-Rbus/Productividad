@@ -112,6 +112,14 @@
   </div>
 
   <!-- DASHBOARD -->
+   <div id="loadingOverlay">
+    <div class="loading-box">
+      <div class="loading-spinner">⏳</div>
+      <div class="loading-text">Sincronizando con Supabase…</div>
+      <div class="loading-sub" id="loadingSub">No cierres esta ventana</div>
+    </div>
+  </div>
+
   <div class="view active" id="view-dashboard">
     <div class="stats-grid" id="statsGrid"></div>
 
@@ -484,14 +492,6 @@ window.addEventListener('load', () => {
   if (action === 'new-event' && typeof openNewEventModal === 'function') openNewEventModal();
 });
 </script>
-
-<div id="loadingOverlay">
-  <div class="loading-box">
-    <div class="loading-spinner">⏳</div>
-    <div class="loading-text">Sincronizando con Supabase…</div>
-    <div class="loading-sub" id="loadingSub">No cierres esta ventana</div>
-  </div>
-</div>
 
 </body>
 </html>
