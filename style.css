@@ -92,14 +92,36 @@
   .date { font-size: 10px; color: var(--text3); margin-top: 2px; letter-spacing: 0.05em; }
 
   /* MAIN */
-  .main { flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-width: 0;
+  }
   .header { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--bg2); }
   .header-title { font-family: var(--font-display); font-size: 20px; font-weight: 600; }
   .header-actions { display: flex; gap: 8px; }
 
-  /* VIEWS */
+  /* VIEWS 
   .view { display: none; flex: 1; padding: 24px 28px; overflow-y: auto; }
   .view.active { display: block; }
+
+  */
+
+  .view {
+    display: none;
+    flex: 1;
+    padding: 24px 28px;
+    overflow-y: auto;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.view.active {
+    display: flex;   /* o block si realmente no necesita ser flex */
+    flex-direction: column;
+}
 
   /* BUTTONS */
   .btn {
@@ -242,14 +264,23 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
+  @media (max-width: 1024px) {
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+    #syncIndicator span { display: none; }
+  }
+
   @media (max-width: 768px) {
-    .sidebar { width: 60px; }
+    .sidebar { width: 60px; height: auto; }
     .nav-item span, .logo-sub, .logo-text, .sidebar-time .date, .nav-section { display: none; }
     .logo { padding: 16px 12px; }
     .nav-item { padding: 12px; justify-content: center; }
     .sidebar-time { padding: 12px; }
     .clock { font-size: 14px; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
+    .header { display:flex; flex-direction: column; align-items: center; gap: 12px; }
+    .header-actions .btn.btn-sm, .header-actions .btn#themeToggle {display:none;}
+    .section-head { flex-direction: column; align-items: center; gap: 6px; }
+    
   }
 
   /* Atajos */
