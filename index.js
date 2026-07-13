@@ -54,6 +54,7 @@ let syncDebounceTimer = null;
 let isApplyingRemoteState = false;
 let pushInFlight = false;   // true mientras hay un push a Supabase en curso
 let hasPendingLocalChange = false; // true si hay un cambio local sin confirmar todavía en Supabase
+let lastPushAt = 0;         // timestamp del último push propio exitoso (para ignorar el eco de Realtime)
 const LOCAL_CACHE_KEY = 'workflow_v2';
 
 function sheetsEnabled() {
@@ -243,6 +244,7 @@ async function pushToSheets(opts) {
     if (error) throw error;
 
     hasPendingLocalChange = false;
+    lastPushAt = Date.now();
     setSyncStatus('synced');
     if (opts.manual) toast('✓ Sincronizado con Supabase', 'success');
     return true;
@@ -333,13 +335,31 @@ function startRealtime() {
   if (!supabaseClient || !currentUser) return;
   stopRealtime();
   const uid = currentUser.id;
+
+  // Cada sincronización borra y reinserta filas, y Realtime avisa
+  // FILA POR FILA (no un solo aviso por sincronización). Sin agrupar
+  // esto, una sync con 30 tareas dispara ~60 avisos casi simultáneos,
+  // cada uno intentando recargar todo — eso era lo que hacía "saltar"
+  // el indicador entre sincronizado/sin conexión.
+  // Solución: juntamos todos los avisos que lleguen en una ráfaga y
+  // recargamos UNA sola vez, 900ms después del último aviso.
+  let realtimeDebounceTimer = null;
+  function onRemoteChange() {
+    // Si el aviso llegó a los pocos segundos de nuestro propio push,
+    // es casi seguro el eco de nuestra propia sincronización (no un
+    // cambio real de otro dispositivo) — lo ignoramos directamente.
+    if (Date.now() - lastPushAt < 4000) return;
+    clearTimeout(realtimeDebounceTimer);
+    realtimeDebounceTimer = setTimeout(() => {
+      if (safeToAutoPull()) loadFromSheets({ silent: true });
+    }, 900);
+  }
+
   ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'].forEach(table => {
     const ch = supabaseClient
       .channel('rt-' + table + '-' + uid)
       .on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${uid}` },
-        () => {
-          if (safeToAutoPull()) loadFromSheets({ silent: true });
-        })
+        onRemoteChange)
       .subscribe();
     realtimeChannels.push(ch);
   });
