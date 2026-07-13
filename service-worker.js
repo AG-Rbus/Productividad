@@ -1,7 +1,7 @@
 // Service Worker — Gestor de Tareas
 // Sube este número de versión cada vez que cambies el HTML/CSS/JS
 // para forzar a los dispositivos a bajar la versión nueva.
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_NAME = 'productividad-cache-' + CACHE_VERSION;
 
 // Archivos propios de la app: se guardan en caché apenas se instala

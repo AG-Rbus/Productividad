@@ -154,7 +154,8 @@ function applyDefaults() {
   if (!state.events) state.events = [];
   if (!state.reminders) state.reminders = [];
   if (!state.log) state.log = [];
-  if (!state.config) state.config = { regenHour: '07:00', lastRegen: null };
+  if (!state.config) state.config = { regenHour: '07:00', lastRegen: null, skipWeekends: true };
+  if (state.config.skipWeekends === undefined) state.config.skipWeekends = true;
 }
 
 function load() {
@@ -362,6 +363,10 @@ function showView(v) {
   if (idx >= 0) document.querySelectorAll('.nav-item')[idx]?.classList.add('active');
   document.getElementById('headerTitle').textContent = viewTitles[v] || v;
   if (v === 'analytics') { renderAnalytics(); return; }
+  if (v === 'datos') {
+    const el = document.getElementById('skipWeekendsToggle');
+    if (el) el.checked = state.config?.skipWeekends !== false;
+  }
   renderAll();
 }
 
@@ -1037,11 +1042,52 @@ function resetAll() {
 // ═══════════════════════════════════════════
 const FREQ_DAYS = { daily: 1, weekly: 7, biweekly: 15, monthly: 30 };
 
+// Si cae sábado (6) o domingo (0), corre la fecha al lunes siguiente.
+function skipWeekend(d) {
+  const day = d.getDay(); // 0=domingo, 6=sábado
+  if (day === 6) d.setDate(d.getDate() + 2);      // sábado -> lunes
+  else if (day === 0) d.setDate(d.getDate() + 1); // domingo -> lunes
+  return d;
+}
+
 function nextDueDate(base, freq) {
   if (!base || !FREQ_DAYS[freq]) return null;
   const d = new Date(base + 'T00:00:00');
   d.setDate(d.getDate() + FREQ_DAYS[freq]);
+  if (state.config?.skipWeekends !== false) skipWeekend(d);
   return d.toISOString().slice(0, 10);
+}
+
+function toggleSkipWeekends() {
+  const el = document.getElementById('skipWeekendsToggle');
+  state.config.skipWeekends = !!el.checked;
+  save();
+  toast(state.config.skipWeekends
+    ? '✓ Las próximas fechas van a evitar sábados y domingos'
+    : 'Las próximas fechas pueden caer cualquier día, incluido fin de semana', 'success');
+}
+
+// Corrige, de una sola vez, las tareas pendientes (no eventualidades)
+// que ya quedaron con fecha de sábado o domingo, corriéndolas al lunes.
+function fixWeekendTasks() {
+  let count = 0;
+  state.tasks.forEach(t => {
+    if (t.done || !t.due) return;
+    const d = new Date(t.due + 'T00:00:00');
+    const day = d.getDay();
+    if (day === 6 || day === 0) {
+      skipWeekend(d);
+      t.due = d.toISOString().slice(0, 10);
+      count++;
+    }
+  });
+  if (count > 0) {
+    save();
+    renderAll();
+    toast(`✓ ${count} tarea${count === 1 ? '' : 's'} corrida${count === 1 ? '' : 's'} al lunes`, 'success');
+  } else {
+    toast('No hay tareas pendientes en fin de semana', 'success');
+  }
 }
 
 // Genera la próxima instancia de UNA tarea recurrente completada

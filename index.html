@@ -294,6 +294,18 @@
 
 
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📅 Recurrencias</div>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text);margin-bottom:8px;">
+        <input type="checkbox" id="skipWeekendsToggle" onchange="toggleSkipWeekends()" style="width:auto;accent-color:var(--accent);">
+        No asignar tareas diarias/semanales/quincenales/mensuales a sábados o domingos
+      </label>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:12px;">
+        Si la próxima fecha calculada cae en fin de semana, se corre automáticamente al lunes siguiente. Aplica a las próximas fechas que se generen a partir de ahora.
+      </div>
+      <button class="btn btn-sm" onclick="fixWeekendTasks()">🔧 Correr al lunes las tareas pendientes que ya caen en sábado/domingo</button>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📦 Exportar</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-accent" onclick="exportJSON()">↓ Backup JSON (completo)</button>
