@@ -288,7 +288,7 @@
         <div style="font-size:11px;color:var(--text2);margin-bottom:10px;">
           Sesión iniciada como <strong id="datosUserEmail">—</strong>. Tus datos están separados de los de tus compañeros automáticamente: cada uno ve solo lo suyo.
         </div>
-        <button class="btn btn-red btn-sm" onclick="signOut()">Cerrar sesión</button>
+        <button id="authActionBtn" class="btn btn-red btn-sm" onclick="handleAuthAction()">Cerrar sesión</button>
       </div>
     </div>
 
@@ -484,11 +484,14 @@ window.addEventListener('load', () => {
   if (action === 'new-event' && typeof openNewEventModal === 'function') openNewEventModal();
 });
 </script>
-<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;color:var(--text);">
-  <div style="text-align:center">
-    <div style="font-size:24px;margin-bottom:8px">⏳</div>
-    <div>Sincronizando con Supabase…</div>
+
+<div id="loadingOverlay">
+  <div class="loading-box">
+    <div class="loading-spinner">⏳</div>
+    <div class="loading-text">Sincronizando con Supabase…</div>
+    <div class="loading-sub" id="loadingSub">No cierres esta ventana</div>
   </div>
 </div>
+
 </body>
 </html>

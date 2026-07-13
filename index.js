@@ -114,9 +114,76 @@ async function handleAuthSubmit() {
   }
 }
 
+function openAuthGateForLogin() {
+  authMode = 'login';
+  const titleEl = document.getElementById('authTitle');
+  const submitEl = document.getElementById('authSubmitBtn');
+  const toggleEl = document.getElementById('authToggleBtn');
+  const errorEl = document.getElementById('authError');
+
+  if (titleEl) titleEl.textContent = 'Iniciar sesión';
+  if (submitEl) submitEl.textContent = 'Iniciar sesión';
+  if (toggleEl) toggleEl.textContent = '¿No tenés cuenta? Registrate';
+  if (errorEl) errorEl.textContent = '';
+
+  showAuthGate();
+
+  const emailInput = document.getElementById('authEmail');
+  if (emailInput) {
+    setTimeout(() => {
+      emailInput.focus();
+      emailInput.select();
+    }, 50);
+  }
+}
+
+function updateAuthActionButton() {
+  const btn = document.getElementById('authActionBtn');
+  if (!btn) return;
+
+  if (currentUser) {
+    btn.textContent = 'Cerrar sesión';
+    btn.className = 'btn btn-red btn-sm';
+    btn.onclick = () => handleAuthAction();
+  } else {
+    btn.textContent = 'Iniciar sesión';
+    btn.className = 'btn btn-accent btn-sm';
+    btn.onclick = () => handleAuthAction();
+  }
+}
+
+function handleAuthAction() {
+  if (currentUser) {
+    signOut();
+  } else {
+    openAuthGateForLogin();
+  }
+}
+
 async function signOut() {
   if (!supabaseClient) return;
-  await supabaseClient.auth.signOut();
+
+  // Mostrar overlay INMEDIATAMENTE para que el usuario vea feedback
+  showLoadingOverlay('Cerrando sesión…', 'Guardando cambios locales');
+
+  try {
+    // 1) Si hay un push pendiente, intentamos subirlo antes de cerrar
+    //    (no es bloqueante: si falla, los datos quedan en localStorage)
+    if (hasPendingLocalChange && sheetsEnabled()) {
+      await pushToSheets().catch(() => {});
+    }
+
+    // 2) Cerrar sesión en Supabase
+    await supabaseClient.auth.signOut();
+    // onSignedOut se va a disparar solo desde el listener
+  } catch (err) {
+    console.error('Error al cerrar sesión:', err);
+    toast('Error al cerrar sesión', 'warn');
+  } finally {
+    // Pequeña pausa para que el usuario perciba el cambio
+    await new Promise(r => setTimeout(r, 400));
+    hideLoadingOverlay();
+  }
 }
 
 function showAuthGate() {
@@ -155,9 +222,6 @@ async function onSignedIn(session) {
 
   const success = await loadFromSheets({ silent: true, force: true });
 
-  // Habilitamos pushes SOLO si:
-  //  - la carga fue exitosa, O
-  //  - tenemos datos en localStorage (al menos sabemos qué hay localmente)
   if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
     isInitialSyncComplete = true;
   } else {
@@ -166,17 +230,38 @@ async function onSignedIn(session) {
   }
 
   hideLoadingOverlay();
+  updateAuthActionButton();
   startRealtime();
 }
 
 
 function onSignedOut() {
   currentUser = null;
-  isInitialSyncComplete = false;   // reset clave
-  stopRealtime();
+  isInitialSyncComplete = false;
+  clearTimeout(syncDebounceTimer);
+  realtimeChannels.forEach(ch => { try { supabaseClient.removeChannel(ch); } catch(e){} });
+  realtimeChannels = [];
+
+  // Limpiar TODO el estado visible para que no quede nada de la cuenta anterior
+  state = {
+    tasks: [],
+    events: [],
+    reminders: [],
+    log: [],
+    activeTimer: null,
+  };
+  applyDefaults();
+  localStorage.removeItem(LOCAL_CACHE_KEY);  // ← clave: borra el caché de la cuenta anterior
+
+  const headerUserEmail = document.getElementById('headerUserEmail');
+  const datosUserEmail = document.getElementById('datosUserEmail');
+  if (headerUserEmail) headerUserEmail.textContent = '';
+  if (datosUserEmail) datosUserEmail.textContent = '—';
+
+  updateAuthActionButton();
+  renderAll();
   showAuthGate();
   setSyncStatus('disabled');
-  hideLoadingOverlay();            // por si acaso
 }
 
 // ── scheduleSyncToSheets (REEMPLAZÁ el tuyo) ──
@@ -199,7 +284,10 @@ if (supabaseClient) {
   // Carga inicial: única vez que se dispara sin importar nada más.
   supabaseClient.auth.getSession().then(({ data }) => {
     if (data.session) onSignedIn(data.session);
-    else showAuthGate();
+    else {
+      showAuthGate();
+      updateAuthActionButton();
+    }
   });
 
   // Eventos posteriores: OJO acá es donde estaba el bug. Supabase emite
