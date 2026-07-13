@@ -484,6 +484,11 @@ window.addEventListener('load', () => {
   if (action === 'new-event' && typeof openNewEventModal === 'function') openNewEventModal();
 });
 </script>
-
+<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;color:var(--text);">
+  <div style="text-align:center">
+    <div style="font-size:24px;margin-bottom:8px">⏳</div>
+    <div>Sincronizando con Supabase…</div>
+  </div>
+</div>
 </body>
 </html>

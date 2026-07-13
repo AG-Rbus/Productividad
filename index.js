@@ -129,21 +129,70 @@ function hideAuthGate() {
 // Se llama SOLO cuando de verdad hay que (re)cargar los datos de la
 // cuenta: al abrir la app con sesión ya iniciada, o justo después de
 // loguearse. NO se llama en cada renovación automática del token.
+
+let isInitialSyncComplete = false;
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText    = document.querySelector('#loadingOverlay .loading-text');
+const loadingSub     = document.getElementById('loadingSub');
+
+function showLoadingOverlay(msg, sub) {
+  if (loadingText && msg) loadingText.textContent = msg;
+  if (loadingSub && sub)  loadingSub.textContent  = sub;
+  if (loadingOverlay)     loadingOverlay.classList.add('visible');
+}
+
+function hideLoadingOverlay() {
+  if (loadingOverlay) loadingOverlay.classList.remove('visible');
+}
+
 async function onSignedIn(session) {
   currentUser = { id: session.user.id, email: session.user.email };
   hideAuthGate();
   document.getElementById('headerUserEmail').textContent = currentUser.email;
-  document.getElementById('datosUserEmail').textContent = currentUser.email;
+  document.getElementById('datosUserEmail').textContent  = currentUser.email;
 
-  await loadFromSheets({ silent: true, force: true });
+  showLoadingOverlay('Sincronizando con Supabase…', 'No cierres esta ventana');
+
+  const success = await loadFromSheets({ silent: true, force: true });
+
+  // Habilitamos pushes SOLO si:
+  //  - la carga fue exitosa, O
+  //  - tenemos datos en localStorage (al menos sabemos qué hay localmente)
+  if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
+    isInitialSyncComplete = true;
+  } else {
+    isInitialSyncComplete = false;
+    toast('⚠ No se pudieron cargar datos y no hay caché local. Reintentá más tarde.', 'warn');
+  }
+
+  hideLoadingOverlay();
   startRealtime();
 }
 
+
 function onSignedOut() {
   currentUser = null;
+  isInitialSyncComplete = false;   // reset clave
   stopRealtime();
   showAuthGate();
   setSyncStatus('disabled');
+  hideLoadingOverlay();            // por si acaso
+}
+
+// ── scheduleSyncToSheets (REEMPLAZÁ el tuyo) ──
+function scheduleSyncToSheets() {
+  if (isApplyingRemoteState) return;
+  if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
+
+  // PROTECCIÓN CLAVE: no subir nada hasta que sepamos qué hay en la BD
+  if (!isInitialSyncComplete) {
+    console.warn('Push bloqueado: carga inicial no completada');
+    return;
+  }
+
+  hasPendingLocalChange = true;
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
 }
 
 if (supabaseClient) {
@@ -186,6 +235,9 @@ if (supabaseClient) {
 }
 
 // ── DATOS: subir / bajar ──────────────────
+
+// solo permite push cuando sepamos que el estado local
+
 function applyDefaults() {
   if (!state.tasks) state.tasks = [];
   if (!state.events) state.events = [];
@@ -211,12 +263,24 @@ function save() {
 }
 
 function scheduleSyncToSheets() {
-  if (isApplyingRemoteState) return; // evita rebote al recibir datos de Supabase
+  if (isApplyingRemoteState) return;
   if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
+
+  // ── PROTECCIÓN CLAVE ──
+  // No subir nada a Supabase hasta que sepamos qué hay realmente
+  // en la base remota. Si localStorage estaba vacío y todavía
+  // no terminó la carga inicial, state.tasks = [] y subir eso
+  // borraría toda la base.
+  if (!isInitialSyncComplete) {
+    console.warn('Sincronización en pausa: carga inicial en curso');
+    return;
+  }
+
   hasPendingLocalChange = true;
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
 }
+
 
 // Sube TODO el estado en una sola llamada a una función de la base de
 // datos (save_full_state, ver schema.sql) que hace el reemplazo dentro
@@ -263,15 +327,15 @@ async function loadFromSheets(opts) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
     return false;
   }
-  // Protección clave: si hay un cambio local recién hecho que todavía
-  // no se subió (o se está subiendo en este momento), NO traemos datos
-  // de Supabase — evita pisar ese cambio con una versión más vieja.
-  // Excepción: "force" se usa solo en la carga inicial tras el login,
-  // donde no puede haber cambios locales pendientes todavía.
+
+  // Protección: si hay un cambio local pendiente, no traer datos remotos
   if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
     return false;
   }
+
   setSyncStatus('syncing');
+  isApplyingRemoteState = true;    // ← movido ACÁ, así bloquea pushes desde el primer momento
+
   try {
     const uid = currentUser.id;
     const [tasksR, eventsR, remindersR, logR, cfgR, timerR] = await Promise.all([
@@ -286,8 +350,8 @@ async function loadFromSheets(opts) {
       if (r.error) throw r.error;
     }
 
-    // Si mientras esperábamos la respuesta apareció un cambio local
-    // nuevo, lo respetamos y descartamos lo que acabamos de traer.
+    // Si mientras esperábamos la respuesta apareció un cambio local nuevo,
+    // lo respetamos y descartamos lo que acabamos de traer.
     if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
       setSyncStatus('synced');
       return false;
@@ -295,19 +359,18 @@ async function loadFromSheets(opts) {
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
     const data = {
-      tasks: strip(tasksR.data),
-      events: strip(eventsR.data),
+      tasks:     strip(tasksR.data),
+      events:    strip(eventsR.data),
       reminders: strip(remindersR.data),
-      log: strip(logR.data),
-      config: (cfgR.data && cfgR.data.config) || { regenHour: '07:00', lastRegen: null },
+      log:       strip(logR.data),
+      config:    (cfgR.data && cfgR.data.config) || { regenHour: '07:00', lastRegen: null },
       activeTimer: (timerR.data && timerR.data.timer) || null,
     };
 
-    isApplyingRemoteState = true;
     state = { ...state, ...data };
     applyDefaults();
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state));
-    isApplyingRemoteState = false;
+
     setSyncStatus('synced');
     if (opts.manual) toast('✓ Datos cargados desde Supabase', 'success');
     renderAll();
@@ -316,6 +379,9 @@ async function loadFromSheets(opts) {
     setSyncStatus('error', err.message || String(err));
     if (!opts.silent) toast('⚠ Sin conexión con Supabase, usando datos guardados localmente', 'warn');
     return false;
+  } finally {
+    // SIEMPRE se ejecuta, sin importar si hubo éxito, error o return temprano
+    isApplyingRemoteState = false;
   }
 }
 
