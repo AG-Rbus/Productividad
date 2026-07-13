@@ -279,7 +279,8 @@
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .header { display:flex; flex-direction: column; align-items: center; gap: 12px; }
     .header-actions .btn.btn-sm, .header-actions .btn#themeToggle {display:none;}
-    .section-head { flex-direction: column; align-items: center; gap: 6px; }
+    .section-head { flex-direction: column; align-items: center; gap: 6px;}
+
     
   }
 
