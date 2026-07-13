@@ -490,34 +490,53 @@ function startRealtime() {
   stopRealtime();
   const uid = currentUser.id;
 
-  // Cada sincronización borra y reinserta filas, y Realtime avisa
-  // FILA POR FILA (no un solo aviso por sincronización). Sin agrupar
-  // esto, una sync con 30 tareas dispara ~60 avisos casi simultáneos,
-  // cada uno intentando recargar todo — eso era lo que hacía "saltar"
-  // el indicador entre sincronizado/sin conexión.
-  // Solución: juntamos todos los avisos que lleguen en una ráfaga y
-  // recargamos UNA sola vez, 900ms después del último aviso.
+  // Debounce: juntar varios avisos en uno
   let realtimeDebounceTimer = null;
-  function onRemoteChange() {
-    // Si el aviso llegó a los pocos segundos de nuestro propio push,
-    // es casi seguro el eco de nuestra propia sincronización (no un
-    // cambio real de otro dispositivo) — lo ignoramos directamente.
-    if (Date.now() - lastPushAt < 4000) return;
+  function onRemoteChange(payload) {
+    console.log('[RT]', payload.table, payload.eventType);
+
+    // Eco propio: ignorar cambios que se originan en este dispositivo
+    if (Date.now() - lastPushAt < 4000) {
+      console.log('[RT] Ignorado (eco propio)');
+      return;
+    }
+
     clearTimeout(realtimeDebounceTimer);
     realtimeDebounceTimer = setTimeout(() => {
-      if (safeToAutoPull()) loadFromSheets({ silent: true });
-    }, 900);
+      if (safeToAutoPull()) {
+        console.log('[RT] Refrescando desde Supabase…');
+        loadFromSheets({ silent: true });
+      }
+    }, 800);
   }
 
-  ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'].forEach(table => {
+  const tables = ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'];
+  tables.forEach(table => {
     const ch = supabaseClient
       .channel('rt-' + table + '-' + uid)
-      .on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${uid}` },
-        onRemoteChange)
-      .subscribe();
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: table,
+          filter: `user_id=eq.${uid}`   // ← mismo formato que tu test
+        },
+        onRemoteChange
+      )
+      .subscribe((status, err) => {
+        console.log(`[RT ${table}] status:`, status);
+        if (err) console.error(`[RT ${table}] error:`, err);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[RT ${table}] ⚠️ Falló la suscripción`);
+        }
+      });
     realtimeChannels.push(ch);
   });
+
+  console.log('[RT] Suscripciones iniciadas para', tables.length, 'tablas');
 }
+
 
 function setSyncStatus(status, errorMsg) {
   syncState.status = status;
@@ -1541,22 +1560,21 @@ const shortcuts = {
 };
 
 document.addEventListener("keydown", e => {
-
+    if (!e.key) return;  // ← protección
+    
     const keys = [];
-
     if (e.ctrlKey) keys.push("ctrl");
     if (e.altKey) keys.push("alt");
     if (e.shiftKey) keys.push("shift");
-
     keys.push(e.key.toLowerCase());
-
+    
     const combo = keys.join("+");
-
     if (shortcuts[combo]) {
         e.preventDefault();
         shortcuts[combo]();
     }
 });
+
 
 
 // ═══════════════════════════════════════════
