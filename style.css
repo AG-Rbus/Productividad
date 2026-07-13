@@ -264,12 +264,8 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
-  @media (max-width: 1024px) {
-    .stats-grid { grid-template-columns: 1fr 1fr; }
-    #syncIndicator span { display: none; }
-  }
 
-  @media (max-width: 768px) {
+  @media (max-width: 1150px) {
     .sidebar { width: 60px; height: auto; }
     .nav-item span, .logo-sub, .logo-text, .sidebar-time .date, .nav-section { display: none; }
     .logo { padding: 16px 12px; }
