@@ -52,6 +52,8 @@ let realtimeChannels = [];
 let syncState = { status: 'idle', lastSync: null, lastError: null };
 let syncDebounceTimer = null;
 let isApplyingRemoteState = false;
+let pushInFlight = false;   // true mientras hay un push a Supabase en curso
+let hasPendingLocalChange = false; // true si hay un cambio local sin confirmar todavía en Supabase
 const LOCAL_CACHE_KEY = 'workflow_v2';
 
 function sheetsEnabled() {
@@ -102,7 +104,7 @@ async function handleAuthSubmit() {
         return;
       }
     }
-    // onAuthStateChange se encarga de cerrar el gate y cargar los datos
+    // El listener de abajo se encarga de cerrar el gate y cargar los datos
   } catch (err) {
     errEl.style.color = 'var(--red)';
     errEl.textContent = err.message || 'Error al iniciar sesión';
@@ -123,27 +125,61 @@ function hideAuthGate() {
   document.getElementById('authGate').classList.remove('open');
 }
 
-async function onAuthReady(session) {
-  currentUser = session ? { id: session.user.id, email: session.user.email } : null;
-
-  if (!currentUser) {
-    stopRealtime();
-    showAuthGate();
-    setSyncStatus('disabled');
-    return;
-  }
-
+// Se llama SOLO cuando de verdad hay que (re)cargar los datos de la
+// cuenta: al abrir la app con sesión ya iniciada, o justo después de
+// loguearse. NO se llama en cada renovación automática del token.
+async function onSignedIn(session) {
+  currentUser = { id: session.user.id, email: session.user.email };
   hideAuthGate();
   document.getElementById('headerUserEmail').textContent = currentUser.email;
   document.getElementById('datosUserEmail').textContent = currentUser.email;
 
-  await loadFromSheets({ silent: true });
+  await loadFromSheets({ silent: true, force: true });
   startRealtime();
 }
 
+function onSignedOut() {
+  currentUser = null;
+  stopRealtime();
+  showAuthGate();
+  setSyncStatus('disabled');
+}
+
 if (supabaseClient) {
-  supabaseClient.auth.onAuthStateChange((_event, session) => onAuthReady(session));
-  supabaseClient.auth.getSession().then(({ data }) => onAuthReady(data.session));
+  // Carga inicial: única vez que se dispara sin importar nada más.
+  supabaseClient.auth.getSession().then(({ data }) => {
+    if (data.session) onSignedIn(data.session);
+    else showAuthGate();
+  });
+
+  // Eventos posteriores: OJO acá es donde estaba el bug. Supabase emite
+  // eventos como TOKEN_REFRESHED cada ~1 hora en segundo plano, y antes
+  // esto disparaba una recarga completa de datos que pisaba cualquier
+  // cambio reciente que todavía no se hubiera sincronizado (por eso
+  // reaparecían tareas recién completadas, o se "reseteaba" el timer).
+  // Ahora SOLO recargamos datos en un login/logout real.
+  let lastKnownUserId = null;
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' || !session) {
+      lastKnownUserId = null;
+      onSignedOut();
+      return;
+    }
+    if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+      // Solo actualizamos el usuario/token interno, sin recargar datos.
+      currentUser = { id: session.user.id, email: session.user.email };
+      return;
+    }
+    // SIGNED_IN: puede ser un login real, o Supabase re-emitiendo el
+    // mismo evento para la misma sesión (pasa al volver a una pestaña).
+    // Solo recargamos si el usuario logueado cambió de verdad.
+    if (session.user.id !== lastKnownUserId) {
+      lastKnownUserId = session.user.id;
+      onSignedIn(session);
+    } else {
+      currentUser = { id: session.user.id, email: session.user.email };
+    }
+  });
 } else {
   console.warn('Supabase no está configurado todavía (ver SUPABASE_URL/SUPABASE_ANON_KEY en index.js)');
 }
@@ -176,52 +212,37 @@ function save() {
 function scheduleSyncToSheets() {
   if (isApplyingRemoteState) return; // evita rebote al recibir datos de Supabase
   if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
+  hasPendingLocalChange = true;
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
 }
 
-// Reemplaza, para cada tabla del usuario actual, todas las filas por
-// el estado actual (igual de simple que el enfoque anterior con
-// Sheets: "borrar todo y reescribir"). Para el volumen de datos de
-// una persona (decenas/cientos de filas) esto es más que suficiente.
+// Sube TODO el estado en una sola llamada a una función de la base de
+// datos (save_full_state, ver schema.sql) que hace el reemplazo dentro
+// de una única transacción: o se guarda todo, o no se guarda nada — a
+// diferencia del enfoque anterior (borrar tabla por tabla y reinsertar
+// desde el navegador), que podía dejar datos borrados a mitad de camino
+// si algo fallaba en el medio.
 async function pushToSheets(opts) {
   opts = opts || {};
   if (!sheetsEnabled()) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
     return false;
   }
+  pushInFlight = true;
   setSyncStatus('syncing');
   try {
-    const uid = currentUser.id;
-    const withUser = (arr) => arr.map(r => ({ ...r, user_id: uid }));
-
-    const tables = [
-      ['tasks', state.tasks],
-      ['events', state.events],
-      ['reminders', state.reminders],
-      ['log', state.log],
-    ];
-    for (const [table, rows] of tables) {
-      const del = await supabaseClient.from(table).delete().eq('user_id', uid);
-      if (del.error) throw del.error;
-      if (rows.length) {
-        const ins = await supabaseClient.from(table).insert(withUser(rows));
-        if (ins.error) throw ins.error;
-      }
-    }
-
-    const cfg = await supabaseClient.from('user_config').upsert({
-      user_id: uid,
-      config: state.config || {},
+    const { error } = await supabaseClient.rpc('save_full_state', {
+      p_tasks: state.tasks,
+      p_events: state.events,
+      p_reminders: state.reminders,
+      p_log: state.log,
+      p_config: state.config || {},
+      p_active_timer: state.activeTimer || null,
     });
-    if (cfg.error) throw cfg.error;
+    if (error) throw error;
 
-    const timer = await supabaseClient.from('active_timer').upsert({
-      user_id: uid,
-      timer: state.activeTimer || null,
-    });
-    if (timer.error) throw timer.error;
-
+    hasPendingLocalChange = false;
     setSyncStatus('synced');
     if (opts.manual) toast('✓ Sincronizado con Supabase', 'success');
     return true;
@@ -229,6 +250,8 @@ async function pushToSheets(opts) {
     setSyncStatus('error', err.message || String(err));
     if (opts.manual) toast('⚠ No se pudo sincronizar: ' + (err.message || err), 'warn');
     return false;
+  } finally {
+    pushInFlight = false;
   }
 }
 
@@ -236,6 +259,14 @@ async function loadFromSheets(opts) {
   opts = opts || {};
   if (!sheetsEnabled()) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
+    return false;
+  }
+  // Protección clave: si hay un cambio local recién hecho que todavía
+  // no se subió (o se está subiendo en este momento), NO traemos datos
+  // de Supabase — evita pisar ese cambio con una versión más vieja.
+  // Excepción: "force" se usa solo en la carga inicial tras el login,
+  // donde no puede haber cambios locales pendientes todavía.
+  if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
     return false;
   }
   setSyncStatus('syncing');
@@ -251,6 +282,13 @@ async function loadFromSheets(opts) {
     ]);
     for (const r of [tasksR, eventsR, remindersR, logR, cfgR, timerR]) {
       if (r.error) throw r.error;
+    }
+
+    // Si mientras esperábamos la respuesta apareció un cambio local
+    // nuevo, lo respetamos y descartamos lo que acabamos de traer.
+    if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
+      setSyncStatus('synced');
+      return false;
     }
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
@@ -282,7 +320,7 @@ async function loadFromSheets(opts) {
 async function manualSync() {
   toast('Sincronizando…', 'success');
   const ok = await pushToSheets({ manual: true });
-  if (ok) await loadFromSheets({ silent: true });
+  if (ok) await loadFromSheets({ silent: true, force: true });
 }
 
 // ── REALTIME: cambios en otro dispositivo llegan al instante ──
