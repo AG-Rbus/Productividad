@@ -213,7 +213,8 @@ function hideLoadingOverlay() {
 }
 
 async function onSignedIn(session) {
-  currentUser = { id: session.user.id, email: session.user.email };
+  const userName = session.user.email.split('@')[0];
+  currentUser = { id: session.user.id, email: session.user.email, name: userName };
   hideAuthGate();
   document.getElementById('headerUserEmail').textContent = currentUser.email;
   document.getElementById('datosUserEmail').textContent  = currentUser.email;
@@ -228,6 +229,7 @@ async function onSignedIn(session) {
     isInitialSyncComplete = false;
     toast('⚠ No se pudieron cargar datos y no hay caché local. Reintentá más tarde.', 'warn');
   }
+  document.title = `${currentUser.name} - Productividad`;
 
   hideLoadingOverlay();
   updateAuthActionButton();
@@ -257,7 +259,7 @@ function onSignedOut() {
   const datosUserEmail = document.getElementById('datosUserEmail');
   if (headerUserEmail) headerUserEmail.textContent = '';
   if (datosUserEmail) datosUserEmail.textContent = '—';
-
+  document.title = 'Productividad';
   updateAuthActionButton();
   renderAll();
   showAuthGate();
