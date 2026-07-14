@@ -1,19 +1,37 @@
 // Tema
 
+// ───────────────────────────────────────────
+// TEMA — se guarda en localStorage para respuesta instantánea
+//        y se sincroniza con Supabase para que persista entre
+//        dispositivos. La fuente de verdad al cargar es Supabase.
+// ───────────────────────────────────────────
 const btn = document.getElementById("themeToggle");
 
-// Cargar tema guardado
-if (localStorage.getItem("theme") === "light") {
-  document.body.classList.add("light");
+function applyTheme(isLight) {
+  document.body.classList.toggle("light", isLight);
+  localStorage.setItem("theme", isLight ? "light" : "dark");
+}
+
+function loadThemeFromState() {
+  const t = state.config?.theme;
+  // Si todavía no hay valor en Supabase, respetamos localStorage
+  // (primer arranque del usuario en cualquier dispositivo).
+  if (t === 'light' || t === 'dark') {
+    applyTheme(t === 'light');
+  } else if (localStorage.getItem("theme") === "light") {
+    document.body.classList.add("light");
+  }
 }
 
 btn.addEventListener("click", () => {
-  document.body.classList.toggle("light");
-
-  // Guardar preferencia
-  const theme = document.body.classList.contains("light") ? "light" : "dark";
-  localStorage.setItem("theme", theme);
+  const newIsLight = !document.body.classList.contains("light");
+  applyTheme(newIsLight);
+  // Persistir en el estado que se sincroniza
+  if (!state.config) state.config = {};
+  state.config.theme = newIsLight ? 'light' : 'dark';
+  save();
 });
+
 
 // ═══════════════════════════════════════════
 // STATE
@@ -222,6 +240,19 @@ async function onSignedIn(session) {
   showLoadingOverlay('Sincronizando con Supabase…', 'No cierres esta ventana');
 
   const success = await loadFromSheets({ silent: true, force: true });
+
+  // Una vez que tenemos el config de Supabase, aplicamos el tema
+  // remoto (sobrescribe el localStorage con la verdad del servidor).
+  if (success && state.config?.theme) {
+    applyTheme(state.config.theme === 'light');
+  }
+
+  if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
+    isInitialSyncComplete = true;
+  } else {
+    isInitialSyncComplete = false;
+    toast('⚠ No se pudieron cargar datos y no hay caché local. Reintentá más tarde.', 'warn');
+  }
 
   if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
     isInitialSyncComplete = true;
@@ -1483,6 +1514,7 @@ function renderAll() {
 // INIT
 // ═══════════════════════════════════════════
 load();
+loadThemeFromState();
 if (state.activeTimer && !state.activeTimer.paused) startTicking();
 renderAll();
 renderSyncIndicator();
