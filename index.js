@@ -310,7 +310,7 @@ function scheduleSyncToSheets() {
 
   hasPendingLocalChange = true;
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
+  syncDebounceTimer = setTimeout(() => pushToSheets(), 400);
 }
 
 if (supabaseClient) {
@@ -409,12 +409,22 @@ function scheduleSyncToSheets() {
 // diferencia del enfoque anterior (borrar tabla por tabla y reinsertar
 // desde el navegador), que podía dejar datos borrados a mitad de camino
 // si algo fallaba en el medio.
+let pendingPush = false;
+
 async function pushToSheets(opts) {
   opts = opts || {};
   if (!sheetsEnabled()) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
     return false;
   }
+
+  // Si ya hay un push en curso, marcar para repetir al terminar
+  if (pushInFlight) {
+    pendingPush = true;
+    if (opts.manual) toast('Sincronización en cola…', 'success');
+    return false;
+  }
+
   pushInFlight = true;
   setSyncStatus('syncing');
   try {
@@ -439,8 +449,17 @@ async function pushToSheets(opts) {
     return false;
   } finally {
     pushInFlight = false;
+    // Si mientras empujábamos aparecieron más cambios, los empujamos
+    if (pendingPush) {
+      pendingPush = false;
+      if (hasPendingLocalChange) {
+        // Programarlo en el próximo tick para no apilar
+        setTimeout(() => pushToSheets(opts), 0);
+      }
+    }
   }
 }
+
 
 async function loadFromSheets(opts) {
   opts = opts || {};
@@ -479,18 +498,25 @@ async function loadFromSheets(opts) {
     }
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
-    const data = {
-      tasks:     strip(tasksR.data),
-      events:    strip(eventsR.data),
-      reminders: strip(remindersR.data),
-      log:       strip(logR.data),
-      config:    (cfgR.data && cfgR.data.config) || { regenHour: '07:00', lastRegen: null },
-      activeTimer: (timerR.data && timerR.data.timer) || null,
-    };
 
-    state = { ...state, ...data };
+    // Merge defensivo: si una query trajo null/undefined, conservamos
+    // el valor local. Esto previene que un pull a mitad de un push
+    // borre cosas que el push todavía no terminó de escribir.
+    const tasks     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
+    const events    = eventsR.data    ? strip(eventsR.data)    : state.events;
+    const reminders = remindersR.data ? strip(remindersR.data) : state.reminders;
+    const log       = logR.data       ? strip(logR.data)       : state.log;
+    const config    = (cfgR.data && cfgR.data.config)
+                        ? { ...state.config, ...cfgR.data.config }
+                        : state.config;
+    const activeTimer = (timerR.data && timerR.data.timer !== undefined)
+                        ? timerR.data.timer
+                        : state.activeTimer;
+
+    state = { ...state, tasks, events, reminders, log, config, activeTimer };
     applyDefaults();
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state));
+
 
     setSyncStatus('synced');
     if (opts.manual) toast('✓ Datos cargados desde Supabase', 'success');
@@ -1534,7 +1560,7 @@ renderSyncIndicator();
 //    se está tipeando).
 //  - Se pausa cuando la pestaña no está visible, para no gastar red.
 function safeToAutoPull() {
-  if (state.activeTimer) return false;
+  // Si hay un modal abierto, NO pisar lo que el usuario está tipeando
   const modalOpen = document.querySelector('.modal-overlay.open');
   if (modalOpen) return false;
   return true;
@@ -1544,11 +1570,22 @@ let autoSyncInterval = null;
 function startAutoSync() {
   if (autoSyncInterval) clearInterval(autoSyncInterval);
   autoSyncInterval = setInterval(() => {
-    if (document.visibilityState === 'visible' && sheetsEnabled() && safeToAutoPull()) {
-      loadFromSheets({ silent: true });
-    }
-  }, 60000); // cada 60s, de respaldo
+    if (document.visibilityState !== 'visible') return;
+    if (!sheetsEnabled()) return;
+    if (pushInFlight) return;        // ← nuevo: no pisa un push en curso
+    if (!safeToAutoPull()) return;
+    loadFromSheets({ silent: true });
+  }, 60000);
 }
+startAutoSync();
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!sheetsEnabled() || pushInFlight) return;
+  if (!safeToAutoPull()) return;
+  loadFromSheets({ silent: true });
+});
+
 startAutoSync();
 
 document.addEventListener('visibilitychange', () => {
