@@ -1598,15 +1598,18 @@ document.addEventListener('visibilitychange', () => {
 function guardarTarea() {
   const gTarea = document.querySelector(".modal-overlay.open");
   switch (gTarea.id) {
+    case 'authGate':
+      handleAuthSubmit();
+      break;
     case 'newTaskModal':
       saveNewTask();
       break;
     case 'newEventModal':
       saveNewEvent();
-    break;
+      break;
     case 'reminderModal':
       saveReminder();
-    break;
+      break;
   }
 }
 function cerrarModalAbierto() {
