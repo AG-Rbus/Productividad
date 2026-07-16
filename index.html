@@ -92,9 +92,9 @@
   <div class="pomodoro-main">
         <h2>POMODORO</h2>
         <div class="pomodoro-tab" role="tablist">
-          <button class="tab active" id="pom-corto" data-minutos="5">Corto</button>
-          <button class="tab" id="pom-desc" data-minutos="15">Descanso</button>
-          <button class="tab" id="pom-largo" data-minutos="20">Largo</button>
+          <button class="tab active" id="pom-corto" data-tipo="corto">Corto</button>
+          <button class="tab" id="pom-desc" data-tipo="descanso">Descanso</button>
+          <button class="tab" id="pom-largo" data-tipo="largo">Largo</button>
 
         </div>
         <div id="tiempo">00:00</div>
@@ -300,7 +300,7 @@
       <div class="section-title">Gestión de datos</div>
   </div>
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+    <div class="container-datos" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">🔗 Sincronización (Supabase)</div>
 
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
@@ -317,7 +317,7 @@
     </div>
 
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+    <div class="container-datos">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📅 Recurrencias</div>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text);margin-bottom:8px;">
         <input type="checkbox" id="skipWeekendsToggle" onchange="toggleSkipWeekends()" style="width:auto;accent-color:var(--accent);">
@@ -329,7 +329,18 @@
       <button class="btn btn-sm" onclick="fixWeekendTasks()">🔧 Correr al lunes las tareas pendientes que ya caen en sábado/domingo</button>
     </div>
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+
+    <div class="container-datos">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⌚ Pomodoro</div>
+      <label>
+        <input type="text" placeholder="Pomodoro Corto (minutos)" id="tiem-corto">
+        <input type="text" placeholder="Descanso (minutos)" id="tiem-desc">
+        <input type="text" placeholder="Pomodoro Largo (minutos)" id="tiem-largo">
+      </label>
+    </div>
+
+
+    <div class="container-datos">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📦 Exportar</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-accent" onclick="exportJSON()">↓ Backup JSON (completo)</button>
@@ -339,7 +350,7 @@
       <div style="font-size:11px;color:var(--text3);margin-top:10px;">El JSON incluye tareas, eventualidades, recordatorios e historial. Usalo como backup o para restaurar en otra PC.</div>
     </div>
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+    <div class="container-datos">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">📂 Importar</div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <label for="importFile" style="text-transform:none;font-size:12px;color:var(--text);margin-bottom:0;cursor:pointer;">
@@ -355,7 +366,7 @@
       <button class="btn btn-red" onclick="resetAll()">Borrar todos los datos</button>
     </div>
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
+    <div class="container-datos">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⌨️ ATAJOS</div>
       <div style="display:inline-block;gap:10px; width: auto;">
         <span style="color: #555; display: flex;">F2<p style="color: #888; margin-left: 5px;"> - Nueva Eventualidad</p></span>

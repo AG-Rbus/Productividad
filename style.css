@@ -149,6 +149,25 @@
     font-weight:bold;
 }
 
+/* DATOS */
+.container-datos {
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:var(--r2);
+  padding:20px;
+  margin-bottom:16px;
+}
+.container-datos label {
+  display:flex;
+  align-items:center;
+  padding: 5px
+}
+
+.container-datos input {
+  margin: 0px 10px;
+}
+
+
   /* MAIN */
   .main {
     flex: 1;

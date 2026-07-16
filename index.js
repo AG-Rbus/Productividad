@@ -623,26 +623,91 @@ function renderSyncIndicator() {
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 
+// ================================
 // POMODORO
+// ================================
 
+const valoresDefault = {
+    corto: 5,
+    descanso: 15,
+    largo: 25
+};
 
-const tabs = document.querySelectorAll(".tab");
+function obtenerMinutos() {
+
+    let valor = Number(tiempos[modoActual].value);
+
+    if (!valor || valor <= 0) {
+        valor = valoresDefault[modoActual];
+        tiempos[modoActual].value = valor;
+    }
+
+    return valor;
+}
+
+// Display del tiempo
 const tiempo = document.getElementById("tiempo");
 
-let minutosSeleccionados = 25;
+// Inputs de configuración
+const tiem_corto = document.getElementById("tiem-corto");
+const tiem_largo = document.getElementById("tiem-largo");
+const tiem_desc = document.getElementById("tiem-desc");
 
+// Tabs
+const tabs = document.querySelectorAll(".tab");
+
+// Relación modo -> input
+const tiempos = {
+    corto: tiem_corto,
+    largo: tiem_largo,
+    descanso: tiem_desc
+};
+
+// Modo por defecto
+let modoActual = "corto";
+
+// Actualiza el reloj
+function actualizarTiempo() {
+
+    const minutos = obtenerMinutos();
+
+    tiempo.textContent =
+        `${String(minutos).padStart(2, "0")}:00`;
+
+}
+
+// Cambio de pestañas
 tabs.forEach(tab => {
+
     tab.addEventListener("click", () => {
 
         tabs.forEach(t => t.classList.remove("active"));
         tab.classList.add("active");
 
-        minutosSeleccionados = Number(tab.dataset.minutos);
+        modoActual = tab.dataset.tipo;
 
-        tiempo.textContent =
-            `${String(minutosSeleccionados).padStart(2,"0")}:00`;
+        actualizarTiempo();
+
     });
+
 });
+
+// Si cambia cualquier input, actualiza solamente
+// si ese modo está siendo mostrado.
+Object.entries(tiempos).forEach(([modo, input]) => {
+
+    input.addEventListener("input", () => {
+
+        if (modo === modoActual) {
+            actualizarTiempo();
+        }
+
+    });
+
+});
+
+// Mostrar el tiempo inicial
+actualizarTiempo();
 
 
 // ═══════════════════════════════════════════
