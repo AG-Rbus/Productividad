@@ -89,6 +89,21 @@
       <i class="icon">↓</i><span>Datos</span>
     </div>
   </div>
+  <div class="pomodoro-main">
+        <h2>POMODORO</h2>
+        <div class="pomodoro-tab" role="tablist">
+          <button class="tab active" id="pom-corto" data-minutos="5">Corto</button>
+          <button class="tab" id="pom-desc" data-minutos="15">Descanso</button>
+          <button class="tab" id="pom-largo" data-minutos="20">Largo</button>
+
+        </div>
+        <div id="tiempo">00:00</div>
+        <div class="pomodoro-controls">
+          <button class="btn btn-accent" id="pomStartBtn" onclick="startPomodoro()">▶</button>
+          <button class="btn" id="pomPauseBtn" onclick="pausePomodoro()" disabled>⏸</button>
+          <button class="btn" id="pomResetBtn" onclick="resetPomodoro()" disabled>🔄</button>
+        </div>
+  </div>
   <div class="sidebar-time">
     <div class="clock" id="clock">00:00</div>
     <div class="date" id="dateLabel"></div>
@@ -129,6 +144,7 @@
     <div id="activeTasksArea">
       <div class="empty"><div class="empty-icon">⏸</div>Ninguna tarea en curso</div>
     </div>
+    
 
     <div class="section-head" style="margin-top:28px;">
       <div class="section-title">📅 Vencen hoy o mañana</div>

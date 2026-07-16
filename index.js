@@ -623,6 +623,28 @@ function renderSyncIndicator() {
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 
+// POMODORO
+
+
+const tabs = document.querySelectorAll(".tab");
+const tiempo = document.getElementById("tiempo");
+
+let minutosSeleccionados = 25;
+
+tabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+
+        tabs.forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+
+        minutosSeleccionados = Number(tab.dataset.minutos);
+
+        tiempo.textContent =
+            `${String(minutosSeleccionados).padStart(2,"0")}:00`;
+    });
+});
+
+
 // ═══════════════════════════════════════════
 // CLOCK
 // ═══════════════════════════════════════════
