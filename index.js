@@ -686,7 +686,7 @@ tabs.forEach(tab => {
 
         modoActual = tab.dataset.tipo;
 
-        actualizarTiempo();
+        reiniciarTemporizador();
 
     });
 
@@ -709,6 +709,86 @@ Object.entries(tiempos).forEach(([modo, input]) => {
 // Mostrar el tiempo inicial
 actualizarTiempo();
 
+// Temporizador Pomodoro
+let segundosRestantes = 0;
+let intervalo = null;
+
+// Mostrar tiempo
+
+function mostrarTiempo() {
+
+    const minutos = Math.floor(segundosRestantes / 60);
+    const segundos = segundosRestantes % 60;
+
+    tiempo.textContent =
+        `${String(minutos).padStart(2, "0")}:${String(segundos).padStart(2, "0")}`;
+
+}
+
+// Reiniciar temporizador
+function reiniciarTemporizador() {
+
+    clearInterval(intervalo);
+
+    segundosRestantes = obtenerMinutos() * 60;
+
+    mostrarTiempo();
+
+}
+
+// Iniciar temporizador
+
+function iniciarTemporizador() {
+
+    if (intervalo) return; // Evita iniciar dos veces
+
+    intervalo = setInterval(() => {
+
+        if (segundosRestantes <= 0) {
+
+            clearInterval(intervalo);
+            intervalo = null;
+
+            alert("¡Tiempo terminado!");
+            return;
+        }
+
+        segundosRestantes--;
+
+        mostrarTiempo();
+
+    }, 1000);
+
+}
+
+// Pausar temporizador
+function pausarTemporizador() {
+
+    clearInterval(intervalo);
+    intervalo = null;
+
+}
+
+// Reset temporizador
+function resetTemporizador() {
+
+    pausarTemporizador();
+    reiniciarTemporizador();
+
+}
+
+// Botones Reloj
+document
+    .getElementById("pomStartBtn")
+    .addEventListener("click", iniciarTemporizador);
+
+document
+    .getElementById("pomPauseBtn")
+    .addEventListener("click", pausarTemporizador);
+
+document
+    .getElementById("pomResetBtn")
+    .addEventListener("click", resetTemporizador);
 
 // ═══════════════════════════════════════════
 // CLOCK
