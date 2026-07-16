@@ -634,13 +634,20 @@ const valoresDefault = {
 };
 
 function obtenerMinutos() {
-    let valor = Number(tiempos[modoActual].value);
-    if (!valor || valor <= 0) {
-        valor = valoresDefault[modoActual];
-        tiempos[modoActual].value = valor;
-    }
-    return valor;
+    const raw = tiempos[modoActual].value;
+
+    // Si el input está vacío, devolvemos el default para los cálculos
+    // pero NO tocamos el input (así el usuario puede seguir tipeando)
+    if (raw === '') return valoresDefault[modoActual];
+
+    const valor = Number(raw);
+    if (Number.isNaN(valor)) return valoresDefault[modoActual];
+
+    return valor < 0 ? 0 : valor;
 }
+
+
+
 
 // Display del tiempo
 const tiempo = document.getElementById("tiempo");
@@ -667,6 +674,7 @@ function actualizarTiempo() {
     const minutos = obtenerMinutos();
     tiempo.textContent = `${String(minutos).padStart(2, "0")}:00`;
 }
+
 
 // Cambio de pestañas
 tabs.forEach(tab => {
