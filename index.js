@@ -622,6 +622,23 @@ function renderSyncIndicator() {
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+// Ubicación Pomodoro (responsive)
+
+const pomodoroContainer = document.getElementById('pomodoroMain');
+const pomodoroOriginal = document.getElementById('pomodoroContainer');
+const pomodoroMovil = document.getElementById('pomodoroMovil');
+
+function moverPomodoro() {
+  if (window.innerWidth < 1170) {
+    pomodoroMovil.appendChild(pomodoroContainer);
+  } else {
+    pomodoroOriginal.appendChild(pomodoroContainer);
+  }
+}
+
+moverPomodoro();
+window.addEventListener('resize', moverPomodoro);
+
 
 // ================================
 // POMODORO (vinculado a la tarea activa)

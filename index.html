@@ -89,21 +89,24 @@
       <i class="icon">↓</i><span>Datos</span>
     </div>
   </div>
-  <div class="pomodoro-main">
-        <h2>POMODORO</h2>
-        <div class="pomodoro-tab" role="tablist">
-          <button class="tab active" id="pom-corto" data-tipo="corto">Corto</button>
-          <button class="tab" id="pom-desc" data-tipo="descanso">Descanso</button>
-          <button class="tab" id="pom-largo" data-tipo="largo">Largo</button>
+  <div class="pomodoroMovil" id="pomodoroContainer">
+    <div class="pomodoro-main" id="pomodoroMain">
+            <h2>POMODORO</h2>
+            <div class="pomodoro-tab" role="tablist">
+              <button class="tab active" id="pom-corto" data-tipo="corto">Corto</button>
+              <button class="tab" id="pom-desc" data-tipo="descanso">Descanso</button>
+              <button class="tab" id="pom-largo" data-tipo="largo">Largo</button>
 
-        </div>
-        <div id="tiempo">00:00</div>
-        <div class="pomodoro-controls">
-          <button class="btn btn-accent" id="pomStartBtn">▶</button>
-          <button class="btn" id="pomPauseBtn">⏸</button>
-          <button class="btn" id="pomResetBtn">🔄</button>
-        </div>
+            </div>
+            <div id="tiempo">00:00</div>
+            <div class="pomodoro-controls">
+              <button class="btn btn-accent" id="pomStartBtn">▶</button>
+              <button class="btn" id="pomPauseBtn">⏸</button>
+              <button class="btn" id="pomResetBtn">🔄</button>
+            </div>
+      </div>
   </div>
+  
   <div class="sidebar-time">
     <div class="clock" id="clock">00:00</div>
     <div class="date" id="dateLabel"></div>
@@ -143,6 +146,9 @@
     </div>
     <div id="activeTasksArea">
       <div class="empty"><div class="empty-icon">⏸</div>Ninguna tarea en curso</div>
+    </div>
+    <div id="pomodoroMovil">
+
     </div>
     
 
@@ -330,7 +336,7 @@
     </div>
 
 
-    <div class="container-datos">
+    <div class="container-datos" id="pomodoroContainer">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⌚ Pomodoro</div>
       <label>
         <input type="text" placeholder="Pomodoro Corto (minutos)" id="tiem-corto">
