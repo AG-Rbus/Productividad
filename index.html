@@ -50,7 +50,6 @@
     </div>
 
     <div style="font-size:10px;color:var(--text3);margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
-      Cada persona tiene su propia cuenta y ve únicamente sus propias tareas, eventualidades y recordatorios.
     </div>
   </div>
 </div>
@@ -122,7 +121,7 @@
     <div class="header-actions">
       <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
       <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
-      <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con Supabase">⟲ Sincronizar</button>
+      <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con BD">⟲ Sincronizar</button>
       <button class="btn btn-accent" onclick="openNewTaskModal()">+ Nueva tarea</button>
       <button class="btn" onclick="openNewEventModal()">⚡ Eventualidad<span class="ATAJOS">F2</span></button>
       <button class="btn" id="themeToggle">🌓 Tema</button>
@@ -133,7 +132,7 @@
    <div id="loadingOverlay">
     <div class="loading-box">
       <div class="loading-spinner">⏳</div>
-      <div class="loading-text">Sincronizando con Supabase…</div>
+      <div class="loading-text">Sincronizando con BD…</div>
       <div class="loading-sub" id="loadingSub">No cierres esta ventana</div>
     </div>
   </div>
@@ -307,7 +306,7 @@
   </div>
 
     <div class="container-datos" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;">
-      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">🔗 Sincronización (Supabase)</div>
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">🔗 Sincronización</div>
 
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
         <span id="syncIndicatorDatos" style="font-size:12px;"></span>
@@ -316,7 +315,7 @@
 
       <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:10px;">
-          Sesión iniciada como <strong id="datosUserEmail">—</strong>. Tus datos están separados de los de tus compañeros automáticamente: cada uno ve solo lo suyo.
+          Sesión iniciada como <strong id="datosUserEmail">—</strong>.
         </div>
         <button id="authActionBtn" class="btn btn-red btn-sm" onclick="handleAuthAction()">Cerrar sesión</button>
       </div>
