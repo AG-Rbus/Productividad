@@ -624,7 +624,7 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 
 
 // ================================
-// POMODORO
+// POMODORO (vinculado a la tarea activa)
 // ================================
 
 const valoresDefault = {
@@ -634,14 +634,11 @@ const valoresDefault = {
 };
 
 function obtenerMinutos() {
-
     let valor = Number(tiempos[modoActual].value);
-
     if (!valor || valor <= 0) {
         valor = valoresDefault[modoActual];
         tiempos[modoActual].value = valor;
     }
-
     return valor;
 }
 
@@ -651,144 +648,152 @@ const tiempo = document.getElementById("tiempo");
 // Inputs de configuración
 const tiem_corto = document.getElementById("tiem-corto");
 const tiem_largo = document.getElementById("tiem-largo");
-const tiem_desc = document.getElementById("tiem-desc");
+const tiem_desc  = document.getElementById("tiem-desc");
 
 // Tabs
 const tabs = document.querySelectorAll(".tab");
 
 // Relación modo -> input
 const tiempos = {
-    corto: tiem_corto,
-    largo: tiem_largo,
+    corto:    tiem_corto,
+    largo:    tiem_largo,
     descanso: tiem_desc
 };
 
 // Modo por defecto
 let modoActual = "corto";
 
-// Actualiza el reloj
 function actualizarTiempo() {
-
     const minutos = obtenerMinutos();
-
-    tiempo.textContent =
-        `${String(minutos).padStart(2, "0")}:00`;
-
+    tiempo.textContent = `${String(minutos).padStart(2, "0")}:00`;
 }
 
 // Cambio de pestañas
 tabs.forEach(tab => {
-
     tab.addEventListener("click", () => {
-
         tabs.forEach(t => t.classList.remove("active"));
         tab.classList.add("active");
-
         modoActual = tab.dataset.tipo;
-
         reiniciarTemporizador();
-
     });
-
 });
 
-// Si cambia cualquier input, actualiza solamente
-// si ese modo está siendo mostrado.
+// Si cambia cualquier input, actualiza solo si ese modo está siendo mostrado
 Object.entries(tiempos).forEach(([modo, input]) => {
-
     input.addEventListener("input", () => {
-
-        if (modo === modoActual) {
-            actualizarTiempo();
-        }
-
+        if (modo === modoActual) actualizarTiempo();
     });
-
 });
 
-// Mostrar el tiempo inicial
 actualizarTiempo();
 
-// Temporizador Pomodoro
+// Estado interno del pomodoro
 let segundosRestantes = 0;
 let intervalo = null;
 
-// Mostrar tiempo
+function esModoDescanso() {
+    return modoActual === 'descanso';
+}
 
 function mostrarTiempo() {
-
     const minutos = Math.floor(segundosRestantes / 60);
     const segundos = segundosRestantes % 60;
-
     tiempo.textContent =
         `${String(minutos).padStart(2, "0")}:${String(segundos).padStart(2, "0")}`;
-
 }
 
-// Reiniciar temporizador
 function reiniciarTemporizador() {
-
     clearInterval(intervalo);
-
+    intervalo = null;
     segundosRestantes = obtenerMinutos() * 60;
-
     mostrarTiempo();
-
 }
 
-// Iniciar temporizador
+// Tick del pomodoro cuando está vinculado a una tarea
+function tickPomodoroVinculado() {
+    // Si el timer activo se cerró desde otro lado (botón ■ de la tarea,
+    // o la app), frenamos el pomodoro también
+    if (!state.activeTimer) {
+        clearInterval(intervalo);
+        intervalo = null;
+        reiniciarTemporizador();
+        return;
+    }
 
+    // Si el timer está pausado, el pomodoro también queda en pausa
+    if (state.activeTimer.paused) return;
+
+    if (segundosRestantes <= 0) {
+        clearInterval(intervalo);
+        intervalo = null;
+        const t = state.activeTimer;
+        stopTimer(t.id, t.type);   // registra la sesión y suma a totalMs
+        toast('🍅 Pomodoro terminado · sesión guardada', 'success');
+        reiniciarTemporizador();
+        return;
+    }
+
+    segundosRestantes--;
+    mostrarTiempo();
+}
+
+// Iniciar
 function iniciarTemporizador() {
+    if (intervalo) return; // ya está corriendo
 
-    if (intervalo) return; // Evita iniciar dos veces
+    // Modo descanso: timer independiente, NO descuenta de tareas
+    if (esModoDescanso()) {
+        intervalo = setInterval(() => {
+            if (segundosRestantes <= 0) {
+                clearInterval(intervalo);
+                intervalo = null;
+                alert("¡Descanso terminado!");
+                reiniciarTemporizador();
+                return;
+            }
+            segundosRestantes--;
+            mostrarTiempo();
+        }, 1000);
+        return;
+    }
 
-    intervalo = setInterval(() => {
+    // Modo corto/largo: necesita haber una tarea activa
+    if (!state.activeTimer) {
+        toast('Iniciá una tarea o eventualidad primero', 'warn');
+        return;
+    }
 
-        if (segundosRestantes <= 0) {
+    // Si el timer está pausado, lo reanudamos
+    if (state.activeTimer.paused) resumeTimer();
 
-            clearInterval(intervalo);
-            intervalo = null;
-
-            alert("¡Tiempo terminado!");
-            return;
-        }
-
-        segundosRestantes--;
-
-        mostrarTiempo();
-
-    }, 1000);
-
+    // Arranca el countdown del pomodoro en paralelo
+    intervalo = setInterval(tickPomodoroVinculado, 1000);
 }
 
-// Pausar temporizador
+// Pausar
 function pausarTemporizador() {
-
     clearInterval(intervalo);
     intervalo = null;
 
+    // Si estamos en modo corto/largo y hay un timer activo, también lo pausamos
+    if (!esModoDescanso() && state.activeTimer && !state.activeTimer.paused) {
+        pauseTimer();
+    }
 }
 
-// Reset temporizador
+// Reset: solo resetea el display del pomodoro,
+// NO detiene el timer de la tarea (igual que antes)
 function resetTemporizador() {
-
-    pausarTemporizador();
+    clearInterval(intervalo);
+    intervalo = null;
     reiniciarTemporizador();
-
 }
 
 // Botones Reloj
-document
-    .getElementById("pomStartBtn")
-    .addEventListener("click", iniciarTemporizador);
+document.getElementById("pomStartBtn").addEventListener("click", iniciarTemporizador);
+document.getElementById("pomPauseBtn").addEventListener("click", pausarTemporizador);
+document.getElementById("pomResetBtn").addEventListener("click", resetTemporizador);
 
-document
-    .getElementById("pomPauseBtn")
-    .addEventListener("click", pausarTemporizador);
-
-document
-    .getElementById("pomResetBtn")
-    .addEventListener("click", resetTemporizador);
 
 // ═══════════════════════════════════════════
 // CLOCK
@@ -868,6 +873,13 @@ function pauseTimer() {
   const elapsed = Date.now() - state.activeTimer.start + (state.activeTimer.pausedMs || 0);
   state.activeTimer.pausedMs = elapsed;
   state.activeTimer.paused = true;
+
+  // Si el pomodoro está corriendo y vinculado a esta tarea, lo frenamos también
+  if (intervalo && !esModoDescanso()) {
+    clearInterval(intervalo);
+    intervalo = null;
+  }
+
   save();
   toast('⏸ Pausado', 'warn');
   renderAll();
@@ -877,6 +889,14 @@ function resumeTimer() {
   if (!state.activeTimer || !state.activeTimer.paused) return;
   state.activeTimer.start = Date.now();
   state.activeTimer.paused = false;
+
+  // Si el pomodoro está vinculado y todavía le queda tiempo,
+  // lo volvemos a arrancar en paralelo
+  if (!esModoDescanso() && segundosRestantes > 0
+      && segundosRestantes < obtenerMinutos() * 60) {
+    intervalo = setInterval(tickPomodoroVinculado, 1000);
+  }
+
   save();
   toast('▶ Reanudado', 'success');
   renderAll();
