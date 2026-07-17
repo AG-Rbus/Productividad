@@ -16,6 +16,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -56,77 +57,82 @@
 
 <!-- SIDEBAR -->
 <nav class="sidebar">
-  <div class="logo">
-    <div class="logo-text">Gestor de Tareas</div>
-    <div class="logo-sub">STEFANI</div>
-  </div>
-  <div class="nav">
-    <div class="nav-section">Vistas</div>
-    <div class="nav-item active" onclick="showView('dashboard')">
-      <i class="icon">◈</i><span>Dashboard<span class="ATAJOS"> (alt+1)</span></span>
+  <div id="dropOrig"><i class="fa fa-angle-double-down oculto" id="DropBtn" style="font-size:24px"  onclick="hideSide()"></i></div>
+  <div class="sidebar-main">
+      <div class="logo-text">Gestor de Tareas</div>
+      <div class="logo-sub">STEFANI</div>
     </div>
-    <div class="nav-item" onclick="showView('tasks')">
-      <i class="icon">≡</i><span>Tareas<span class="ATAJOS"> (alt+2)</span></span>
-    </div>
-    <div class="nav-item" onclick="showView('events')">
-      <i class="icon">⚡</i><span>Eventualidades<span class="ATAJOS"> (alt+3)</span></span>
-    </div>
-    <div class="nav-item" onclick="showView('calendar')">
-      <i class="icon">◫</i><span>Calendario<span class="ATAJOS"> (alt+4)</span></span>
-    </div>
-    <div class="nav-section">Extras</div>
-    <div class="nav-item" onclick="showView('reminders')">
-      <i class="icon">◎</i><span>Recordatorios<span class="ATAJOS"> (alt+5)</span></span>
-    </div>
-    <div class="nav-item" onclick="showView('analytics')">
-      <i class="icon">📊</i><span>Analytics<span class="ATAJOS"> (alt+6)</span></span>
-    </div>
-    <div class="nav-item" onclick="showView('log')">
-      <i class="icon">▤</i><span>Historial</span>
-    </div>
-    <div class="nav-item" onclick="showView('datos')">
-      <i class="icon">↓</i><span>Datos</span>
-    </div>
-  </div>
-  <div class="pomodoroMovil" id="pomodoroContainer">
-    <div class="pomodoro-main" id="pomodoroMain">
-            <h2>POMODORO</h2>
-            <div class="pomodoro-tab" role="tablist">
-              <button class="tab active" id="pom-corto" data-tipo="corto">Corto</button>
-              <button class="tab" id="pom-desc" data-tipo="descanso">Descanso</button>
-              <button class="tab" id="pom-largo" data-tipo="largo">Largo</button>
-
-            </div>
-            <div id="tiempo">00:00</div>
-            <div class="pomodoro-controls">
-              <button class="btn btn-accent" id="pomStartBtn">▶</button>
-              <button class="btn" id="pomPauseBtn">⏸</button>
-              <button class="btn" id="pomResetBtn">🔄</button>
-            </div>
+    <div class="nav">
+      <div class="nav-section">Vistas</div>
+      <div class="nav-item active" onclick="showView('dashboard')">
+        <i class="icon">◈</i><span>Dashboard<span class="ATAJOS"> (alt+1)</span></span>
       </div>
+      <div class="nav-item" onclick="showView('tasks')">
+        <i class="icon">≡</i><span>Tareas<span class="ATAJOS"> (alt+2)</span></span>
+      </div>
+      <div class="nav-item" onclick="showView('events')">
+        <i class="icon">⚡</i><span>Eventualidades<span class="ATAJOS"> (alt+3)</span></span>
+      </div>
+      <div class="nav-item" onclick="showView('calendar')">
+        <i class="icon">◫</i><span>Calendario<span class="ATAJOS"> (alt+4)</span></span>
+      </div>
+      <div class="nav-section">Extras</div>
+      <div class="nav-item" onclick="showView('reminders')">
+        <i class="icon">◎</i><span>Recordatorios<span class="ATAJOS"> (alt+5)</span></span>
+      </div>
+      <div class="nav-item" onclick="showView('analytics')">
+        <i class="icon">📊</i><span>Analytics<span class="ATAJOS"> (alt+6)</span></span>
+      </div>
+      <div class="nav-item" onclick="showView('log')">
+        <i class="icon">▤</i><span>Historial</span>
+      </div>
+      <div class="nav-item" onclick="showView('datos')">
+        <i class="icon">↓</i><span>Datos</span>
+      </div>
+    </div>
+    <div class="pomodoroMovil" id="pomodoroContainer">
+      <div class="pomodoro-main" id="pomodoroMain">
+              <h2>POMODORO</h2>
+              <div class="pomodoro-tab" role="tablist">
+                <button class="tab active" id="pom-corto" data-tipo="corto">Corto</button>
+                <button class="tab" id="pom-desc" data-tipo="descanso">Descanso</button>
+                <button class="tab" id="pom-largo" data-tipo="largo">Largo</button>
+
+              </div>
+              <div id="tiempo">00:00</div>
+              <div class="pomodoro-controls">
+                <button class="btn btn-accent" id="pomStartBtn">▶</button>
+                <button class="btn" id="pomPauseBtn">⏸</button>
+                <button class="btn" id="pomResetBtn">🔄</button>
+              </div>
+        </div>
+    </div>
+    
+    <div class="sidebar-time">
+      <div class="clock" id="clock">00:00</div>
+      <div class="date" id="dateLabel"></div>
+    </div>
   </div>
   
-  <div class="sidebar-time">
-    <div class="clock" id="clock">00:00</div>
-    <div class="date" id="dateLabel"></div>
-  </div>
 </nav>
 
 <!-- MAIN -->
 <div class="main">
-  
-  <div class="header">
-    
-    <div class="header-title" id="headerTitle">Dashboard</div>
-    <div class="header-actions">
-      <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
-      <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
-      <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con BD">⟲ Sincronizar</button>
-      <button class="btn btn-accent" onclick="openNewTaskModal()">+ Nueva tarea</button>
-      <button class="btn" onclick="openNewEventModal()">⚡ Eventualidad<span class="ATAJOS">F2</span></button>
-      <button class="btn" id="themeToggle">🌓 Tema</button>
+  <div id="head">
+    <div id="header-drop"></div>
+    <div class="header">
+      <div class="header-title" id="headerTitle">Dashboard</div>
+      <div class="header-actions">
+        <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
+        <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
+        <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con BD">⟲ Sincronizar</button>
+        <button class="btn btn-accent" onclick="openNewTaskModal()">+ Nueva tarea</button>
+        <button class="btn" onclick="openNewEventModal()">⚡ Eventualidad<span class="ATAJOS">F2</span></button>
+        <button class="btn" id="themeToggle">🌓 Tema</button>
+      </div>
     </div>
   </div>
+   
 
   <!-- DASHBOARD -->
    <div id="loadingOverlay">

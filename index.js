@@ -32,7 +32,6 @@ btn.addEventListener("click", () => {
   save();
 });
 
-
 // ═══════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════
@@ -622,7 +621,8 @@ function renderSyncIndicator() {
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
-// Ubicación Pomodoro (responsive)
+// Ubicación Pomodoro y DropDown (responsive)
+
 
 const pomodoroContainer = document.getElementById('pomodoroMain');
 const pomodoroOriginal = document.getElementById('pomodoroContainer');
@@ -636,9 +636,47 @@ function moverPomodoro() {
   }
 }
 
-moverPomodoro();
-window.addEventListener('resize', moverPomodoro);
 
+function moverDrop(e) {
+    const elIcon = document.querySelector('.fa-angle-double-down')
+    const icono = document.getElementById("DropBtn");
+    const origen = document.getElementById("dropOrig");
+    const destino = document.getElementById("header-drop");
+
+    if (!icono || !origen || !destino) return;
+
+    if (e.matches) {
+        // Menor o igual a 1170px
+        destino.appendChild(icono);
+        elIcon.classList.remove('oculto')
+
+    } else {
+        // Mayor a 1170px
+        origen.appendChild(icono);
+        elIcon.classList.add('oculto')
+        
+    }
+}
+function hideSide() {
+    const side = document.querySelector(".sidebar");
+    const drop = document.getElementById("dropOrig");
+    const header = document.getElementById("header-drop");
+    if (side.classList.contains("oculto")) {
+        side.prepend(drop);
+        side.classList.remove("oculto");
+    } else {
+        header.appendChild(drop);
+        side.classList.add("oculto");
+    }
+}
+
+const media = window.matchMedia("(max-width: 1170px)");
+
+moverDrop(media);      
+moverPomodoro()
+window.addEventListener('resize', moverPomodoro);        // Estado inicial
+media.addEventListener("change", moverDrop); // Cuando cambia el tamaño
+media.addEventListener("change", hideSide)
 
 // ================================
 // POMODORO (vinculado a la tarea activa)
