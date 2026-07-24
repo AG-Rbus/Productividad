@@ -465,6 +465,20 @@ async function pushToSheets(opts) {
   }
 }
 
+async function fetchTablesFromSupabase(uid) {
+  const [tasksR, eventsR, remindersR, logR, cfgR, timerR] = await Promise.all([
+    supabaseClient.from('tasks').select('*').eq('user_id', uid),
+    supabaseClient.from('events').select('*').eq('user_id', uid),
+    supabaseClient.from('reminders').select('*').eq('user_id', uid),
+    supabaseClient.from('log').select('*').eq('user_id', uid),
+    supabaseClient.from('user_config').select('*').eq('user_id', uid).maybeSingle(),
+    supabaseClient.from('active_timer').select('*').eq('user_id', uid).maybeSingle(),
+  ]);
+  for (const r of [tasksR, eventsR, remindersR, logR, cfgR, timerR]) {
+    if (r.error) throw r.error;
+  }
+  return { tasksR, eventsR, remindersR, logR, cfgR, timerR };
+}
 
 async function loadFromSheets(opts) {
   opts = opts || {};
@@ -473,30 +487,17 @@ async function loadFromSheets(opts) {
     return false;
   }
 
-  // Protección: si hay un cambio local pendiente, no traer datos remotos
   if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
     return false;
   }
 
   setSyncStatus('syncing');
-  isApplyingRemoteState = true;    // ← movido ACÁ, así bloquea pushes desde el primer momento
+  isApplyingRemoteState = true;
 
   try {
     const uid = currentUser.id;
-    const [tasksR, eventsR, remindersR, logR, cfgR, timerR] = await Promise.all([
-      supabaseClient.from('tasks').select('*').eq('user_id', uid),
-      supabaseClient.from('events').select('*').eq('user_id', uid),
-      supabaseClient.from('reminders').select('*').eq('user_id', uid),
-      supabaseClient.from('log').select('*').eq('user_id', uid),
-      supabaseClient.from('user_config').select('*').eq('user_id', uid).maybeSingle(),
-      supabaseClient.from('active_timer').select('*').eq('user_id', uid).maybeSingle(),
-    ]);
-    for (const r of [tasksR, eventsR, remindersR, logR, cfgR, timerR]) {
-      if (r.error) throw r.error;
-    }
+    let { tasksR, eventsR, remindersR, logR, cfgR, timerR } = await fetchTablesFromSupabase(uid);
 
-    // Si mientras esperábamos la respuesta apareció un cambio local nuevo,
-    // lo respetamos y descartamos lo que acabamos de traer.
     if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
       setSyncStatus('synced');
       clearTimeout(syncDebounceTimer);
@@ -506,40 +507,40 @@ async function loadFromSheets(opts) {
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
 
-    // Merge defensivo: si una query trajo null/undefined, conservamos
-    // el valor local. Esto previene que un pull a mitad de un push
-    // borre cosas que el push todavía no terminó de escribir.
-    const tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
-    const eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
-    const remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
-    const logRaw       = logR.data       ? strip(logR.data)       : state.log;
+    let tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
+    let eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
+    let remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
+    let logRaw       = logR.data       ? strip(logR.data)       : state.log;
 
-    // ── GUARDA ANTI-BORRADO ──
-    // Si el pull dice que las 4 tablas principales están vacías, pero
-    // localmente ya teníamos datos, no lo aceptamos a la primera: puede
-    // ser un glitch (red, RLS, sesión a medio propagar). Reintentamos
-    // una sola vez antes de decidir.
-    const remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
-                            && remindersRaw.length === 0 && logRaw.length === 0;
     const localHadData = (state.tasks?.length || 0) > 0
                         || (state.events?.length || 0) > 0
                         || (state.reminders?.length || 0) > 0;
 
-    if (remoteLooksEmpty && localHadData && !opts._retried) {
-      console.warn('[Sync] Pull sospechoso (todo vacío con datos locales previos). Reintentando…');
-      isApplyingRemoteState = false; // liberar antes de reintentar
-      await new Promise(r => setTimeout(r, 800));
-      return loadFromSheets({ ...opts, _retried: true });
-    }
+    let remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
+                          && remindersRaw.length === 0 && logRaw.length === 0;
 
-    if (remoteLooksEmpty && localHadData && opts._retried) {
-      console.error('[Sync] Pull vacío confirmado tras reintento. Se descarta para proteger los datos locales.');
-      setSyncStatus('error', 'Se evitó un posible borrado: Supabase devolvió todo vacío');
-      toast('⚠ Se evitó un posible borrado accidental. Tus datos se conservaron localmente. Probá "Sincronizar" manualmente más tarde.', 'warn');
-      hasPendingLocalChange = true;
-      clearTimeout(syncDebounceTimer);
-      syncDebounceTimer = setTimeout(() => pushToSheets(), 3000);
-      return false;
+    if (remoteLooksEmpty && localHadData && !opts.force) {
+      console.warn('[Sync] Pull sospechoso (todo vacío con datos locales previos). Reintentando…');
+      await new Promise(r => setTimeout(r, 800));
+      const retry = await fetchTablesFromSupabase(uid);
+      tasksR = retry.tasksR; eventsR = retry.eventsR;
+      remindersR = retry.remindersR; logR = retry.logR;
+      cfgR = retry.cfgR; timerR = retry.timerR;
+
+      tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
+      eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
+      remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
+      logRaw       = logR.data       ? strip(logR.data)       : state.log;
+
+      remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
+                        && remindersRaw.length === 0 && logRaw.length === 0;
+
+      if (remoteLooksEmpty) {
+        console.error('[Sync] Pull vacío confirmado tras reintento. Se descarta para proteger los datos locales.');
+        setSyncStatus('error', 'Se evitó un posible borrado: Supabase devolvió todo vacío');
+        toast('⚠ Se evitó un posible borrado accidental. Tus datos se conservaron localmente. Usá "Sincronizar" para forzarlo si es intencional.', 'warn');
+        return false;
+      }
     }
 
     const tasks = tasksRaw, events = eventsRaw, reminders = remindersRaw, log = logRaw;
@@ -554,7 +555,6 @@ async function loadFromSheets(opts) {
     applyDefaults();
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state));
 
-
     setSyncStatus('synced');
     if (opts.manual) toast('✓ Datos cargados desde Supabase', 'success');
     renderAll();
@@ -564,7 +564,6 @@ async function loadFromSheets(opts) {
     if (!opts.silent) toast('⚠ Sin conexión con Supabase, usando datos guardados localmente', 'warn');
     return false;
   } finally {
-    // SIEMPRE se ejecuta, sin importar si hubo éxito, error o return temprano
     isApplyingRemoteState = false;
   }
 }
