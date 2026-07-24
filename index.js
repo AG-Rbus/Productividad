@@ -235,35 +235,47 @@ async function onSignedIn(session) {
   hideAuthGate();
   document.getElementById('headerUserEmail').textContent = currentUser.email;
   document.getElementById('datosUserEmail').textContent  = currentUser.email;
+  document.title = `${currentUser.name} - Productividad`;
+  updateAuthActionButton();
 
-  showLoadingOverlay('Sincronizando con Supabase…', 'No cierres esta ventana');
+  // Ya tenemos datos en localStorage desde load() al iniciar la app.
+  // Mostramos eso YA (sin overlay bloqueante) y sincronizamos en
+  // segundo plano. El overlay se muestra solo brevemente, con un
+  // tope máximo, para no dejar al usuario esperando una conexión lenta.
+  const hasLocalCache = !!localStorage.getItem(LOCAL_CACHE_KEY);
 
+  if (hasLocalCache) {
+    // Datos locales ya están renderizados desde el arranque de la app.
+    // No bloqueamos: dejamos la sincronización correr en background.
+    isInitialSyncComplete = true; // el estado local es válido para operar
+    renderSyncIndicator();
+    syncPendingSince(); // ver función nueva abajo
+  } else {
+    // Sin caché local (primer login en este dispositivo): ahí sí
+    // necesitamos esperar los datos, pero con un tope de tiempo.
+    showLoadingOverlay('Sincronizando con Supabase…', 'No cierres esta ventana');
+    await Promise.race([
+      loadFromSheets({ silent: true, force: true }),
+      new Promise(resolve => setTimeout(resolve, 6000)) // tope de 6s
+    ]);
+    isInitialSyncComplete = true;
+    hideLoadingOverlay();
+  }
+
+  startRealtime();
+}
+
+// Sincroniza en segundo plano tras un login con caché local ya
+// disponible. Si tarda, no bloquea nada: cuando termina, loadFromSheets
+// ya se encarga de renderAll() y aplicar el tema remoto si corresponde.
+async function syncPendingSince() {
   const success = await loadFromSheets({ silent: true, force: true });
-
-  // Una vez que tenemos el config de Supabase, aplicamos el tema
-  // remoto (sobrescribe el localStorage con la verdad del servidor).
   if (success && state.config?.theme) {
     applyTheme(state.config.theme === 'light');
   }
-
-  if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
-    isInitialSyncComplete = true;
-  } else {
-    isInitialSyncComplete = false;
-    toast('⚠ No se pudieron cargar datos y no hay caché local. Reintentá más tarde.', 'warn');
+  if (!success) {
+    console.warn('[Sync] No se pudo sincronizar al iniciar sesión, usando caché local por ahora.');
   }
-
-  if (success || localStorage.getItem(LOCAL_CACHE_KEY)) {
-    isInitialSyncComplete = true;
-  } else {
-    isInitialSyncComplete = false;
-    toast('⚠ No se pudieron cargar datos y no hay caché local. Reintentá más tarde.', 'warn');
-  }
-  document.title = `${currentUser.name} - Productividad`;
-
-  hideLoadingOverlay();
-  updateAuthActionButton();
-  startRealtime();
 }
 
 
@@ -521,7 +533,7 @@ async function loadFromSheets(opts) {
 
     if (remoteLooksEmpty && localHadData && !opts.force) {
       console.warn('[Sync] Pull sospechoso (todo vacío con datos locales previos). Reintentando…');
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 400));
       const retry = await fetchTablesFromSupabase(uid);
       tasksR = retry.tasksR; eventsR = retry.eventsR;
       remindersR = retry.remindersR; logR = retry.logR;
