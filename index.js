@@ -298,18 +298,25 @@ function onSignedOut() {
 
 // ── scheduleSyncToSheets (REEMPLAZÁ el tuyo) ──
 function scheduleSyncToSheets() {
-  if (isApplyingRemoteState) return;
   if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
-
-  // PROTECCIÓN CLAVE: no subir nada hasta que sepamos qué hay en la BD
   if (!isInitialSyncComplete) {
     console.warn('Push bloqueado: carga inicial no completada');
     return;
   }
 
+  // Marcar SIEMPRE, incluso si hay un pull en curso, para que ese
+  // pull sepa que debe descartar lo que trajo al terminar.
   hasPendingLocalChange = true;
+
+  if (isApplyingRemoteState) {
+    // No programamos el push todavía: cuando el pull termine,
+    // loadFromSheets va a ver hasPendingLocalChange=true, descartar
+    // sus datos, y hay que asegurarse de reprogramar el push ahí.
+    return;
+  }
+
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => pushToSheets(), 400);
+  syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
 }
 
 if (supabaseClient) {
@@ -469,8 +476,11 @@ async function loadFromSheets(opts) {
 
   // Protección: si hay un cambio local pendiente, no traer datos remotos
   if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
-    return false;
-  }
+  setSyncStatus('synced');
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => pushToSheets(), 300); // ← agregar esto
+  return false;
+}
 
   setSyncStatus('syncing');
   isApplyingRemoteState = true;    // ← movido ACÁ, así bloquea pushes desde el primer momento
@@ -492,9 +502,11 @@ async function loadFromSheets(opts) {
     // Si mientras esperábamos la respuesta apareció un cambio local nuevo,
     // lo respetamos y descartamos lo que acabamos de traer.
     if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
-      setSyncStatus('synced');
-      return false;
-    }
+    setSyncStatus('synced');
+    clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(() => pushToSheets(), 300); // ← agregar esto
+    return false;
+  }
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
 
@@ -554,7 +566,7 @@ function startRealtime() {
     console.log('[RT]', payload.table, payload.eventType);
 
     // Eco propio: ignorar cambios que se originan en este dispositivo
-    if (Date.now() - lastPushAt < 4000) {
+    if (Date.now() - lastPushAt < 1200) {
       console.log('[RT] Ignorado (eco propio)');
       return;
     }
@@ -802,6 +814,7 @@ function tickPomodoroVinculado() {
 
 // Iniciar
 function iniciarTemporizador() {
+  const sonPom = new Audio('/media/BellSound.mpeg');
     if (intervalo) return; // ya está corriendo
 
     // Modo descanso: timer independiente, NO descuenta de tareas
@@ -810,6 +823,7 @@ function iniciarTemporizador() {
             if (segundosRestantes <= 0) {
                 clearInterval(intervalo);
                 intervalo = null;
+                sonPom.play();
                 alert("¡Descanso terminado!");
                 reiniciarTemporizador();
                 return;
