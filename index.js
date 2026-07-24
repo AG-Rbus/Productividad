@@ -390,20 +390,19 @@ function save() {
 }
 
 function scheduleSyncToSheets() {
-  if (isApplyingRemoteState) return;
   if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
 
-  // ── PROTECCIÓN CLAVE ──
-  // No subir nada a Supabase hasta que sepamos qué hay realmente
-  // en la base remota. Si localStorage estaba vacío y todavía
-  // no terminó la carga inicial, state.tasks = [] y subir eso
-  // borraría toda la base.
   if (!isInitialSyncComplete) {
     console.warn('Sincronización en pausa: carga inicial en curso');
     return;
   }
 
   hasPendingLocalChange = true;
+
+  if (isApplyingRemoteState) {
+    return;
+  }
+
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
 }
@@ -476,11 +475,8 @@ async function loadFromSheets(opts) {
 
   // Protección: si hay un cambio local pendiente, no traer datos remotos
   if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
-  setSyncStatus('synced');
-  clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => pushToSheets(), 300); // ← agregar esto
-  return false;
-}
+    return false;
+  }
 
   setSyncStatus('syncing');
   isApplyingRemoteState = true;    // ← movido ACÁ, así bloquea pushes desde el primer momento
