@@ -498,21 +498,51 @@ async function loadFromSheets(opts) {
     // Si mientras esperábamos la respuesta apareció un cambio local nuevo,
     // lo respetamos y descartamos lo que acabamos de traer.
     if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
-    setSyncStatus('synced');
-    clearTimeout(syncDebounceTimer);
-    syncDebounceTimer = setTimeout(() => pushToSheets(), 300); // ← agregar esto
-    return false;
-  }
+      setSyncStatus('synced');
+      clearTimeout(syncDebounceTimer);
+      syncDebounceTimer = setTimeout(() => pushToSheets(), 300);
+      return false;
+    }
 
     const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
 
     // Merge defensivo: si una query trajo null/undefined, conservamos
     // el valor local. Esto previene que un pull a mitad de un push
     // borre cosas que el push todavía no terminó de escribir.
-    const tasks     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
-    const events    = eventsR.data    ? strip(eventsR.data)    : state.events;
-    const reminders = remindersR.data ? strip(remindersR.data) : state.reminders;
-    const log       = logR.data       ? strip(logR.data)       : state.log;
+    const tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
+    const eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
+    const remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
+    const logRaw       = logR.data       ? strip(logR.data)       : state.log;
+
+    // ── GUARDA ANTI-BORRADO ──
+    // Si el pull dice que las 4 tablas principales están vacías, pero
+    // localmente ya teníamos datos, no lo aceptamos a la primera: puede
+    // ser un glitch (red, RLS, sesión a medio propagar). Reintentamos
+    // una sola vez antes de decidir.
+    const remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
+                            && remindersRaw.length === 0 && logRaw.length === 0;
+    const localHadData = (state.tasks?.length || 0) > 0
+                        || (state.events?.length || 0) > 0
+                        || (state.reminders?.length || 0) > 0;
+
+    if (remoteLooksEmpty && localHadData && !opts._retried) {
+      console.warn('[Sync] Pull sospechoso (todo vacío con datos locales previos). Reintentando…');
+      isApplyingRemoteState = false; // liberar antes de reintentar
+      await new Promise(r => setTimeout(r, 800));
+      return loadFromSheets({ ...opts, _retried: true });
+    }
+
+    if (remoteLooksEmpty && localHadData && opts._retried) {
+      console.error('[Sync] Pull vacío confirmado tras reintento. Se descarta para proteger los datos locales.');
+      setSyncStatus('error', 'Se evitó un posible borrado: Supabase devolvió todo vacío');
+      toast('⚠ Se evitó un posible borrado accidental. Tus datos se conservaron localmente. Probá "Sincronizar" manualmente más tarde.', 'warn');
+      hasPendingLocalChange = true;
+      clearTimeout(syncDebounceTimer);
+      syncDebounceTimer = setTimeout(() => pushToSheets(), 3000);
+      return false;
+    }
+
+    const tasks = tasksRaw, events = eventsRaw, reminders = remindersRaw, log = logRaw;
     const config    = (cfgR.data && cfgR.data.config)
                         ? { ...state.config, ...cfgR.data.config }
                         : state.config;
