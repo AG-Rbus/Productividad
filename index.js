@@ -70,6 +70,8 @@ let syncState = { status: 'idle', lastSync: null, lastError: null };
 let syncDebounceTimer = null;
 let isApplyingRemoteState = false;
 let pushInFlight = false;   // true mientras hay un push a Supabase en curso
+let ownPushIgnoreUntil = 0;
+let ownPushActive = false;
 let hasPendingLocalChange = false; // true si hay un cambio local sin confirmar todavía en Supabase
 let lastPushAt = 0;         // timestamp del último push propio exitoso (para ignorar el eco de Realtime)
 const LOCAL_CACHE_KEY = 'workflow_v2';
@@ -402,7 +404,10 @@ function save() {
 }
 
 function scheduleSyncToSheets() {
-  if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
+  if (!sheetsEnabled()) {
+    setSyncStatus('disabled');
+    return;
+  }
 
   if (!isInitialSyncComplete) {
     console.warn('Sincronización en pausa: carga inicial en curso');
@@ -411,12 +416,26 @@ function scheduleSyncToSheets() {
 
   hasPendingLocalChange = true;
 
+  // DEBUG TEMPORAL
+  console.log('[DEBUG SYNC]', {
+    tareasAlProgramar: state.tasks.length,
+    ultima: state.tasks[state.tasks.length - 1]?.name
+  });
+
   if (isApplyingRemoteState) {
     return;
   }
 
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
+
+  syncDebounceTimer = setTimeout(() => {
+    console.log('[DEBUG SYNC]', {
+      tareasAlEjecutarPush: state.tasks.length,
+      ultima: state.tasks[state.tasks.length - 1]?.name
+    });
+
+    pushToSheets();
+  }, 1200);
 }
 
 
@@ -428,6 +447,7 @@ function scheduleSyncToSheets() {
 // si algo fallaba en el medio.
 let pendingPush = false;
 
+
 async function pushToSheets(opts) {
   opts = opts || {};
   if (!sheetsEnabled()) {
@@ -435,7 +455,6 @@ async function pushToSheets(opts) {
     return false;
   }
 
-  // Si ya hay un push en curso, marcar para repetir al terminar
   if (pushInFlight) {
     pendingPush = true;
     if (opts.manual) toast('Sincronización en cola…', 'success');
@@ -443,7 +462,9 @@ async function pushToSheets(opts) {
   }
 
   pushInFlight = true;
+  ownPushActive = true;
   setSyncStatus('syncing');
+
   try {
     const { error } = await supabaseClient.rpc('save_full_state', {
       p_tasks: state.tasks,
@@ -453,43 +474,133 @@ async function pushToSheets(opts) {
       p_config: state.config || {},
       p_active_timer: state.activeTimer || null,
     });
+
     if (error) throw error;
 
     hasPendingLocalChange = false;
     lastPushAt = Date.now();
     setSyncStatus('synced');
+
     if (opts.manual) toast('✓ Sincronizado con Supabase', 'success');
     return true;
+
   } catch (err) {
     setSyncStatus('error', err.message || String(err));
-    if (opts.manual) toast('⚠ No se pudo sincronizar: ' + (err.message || err), 'warn');
+
+    if (opts.manual) {
+      toast(
+        '⚠ No se pudo sincronizar: ' + (err.message || err),
+        'warn'
+      );
+    }
+
     return false;
+
   } finally {
     pushInFlight = false;
-    // Si mientras empujábamos aparecieron más cambios, los empujamos
+    ownPushActive = false;
+
     if (pendingPush) {
       pendingPush = false;
+
       if (hasPendingLocalChange) {
-        // Programarlo en el próximo tick para no apilar
         setTimeout(() => pushToSheets(opts), 0);
       }
     }
   }
 }
 
+async function fetchAllRows(queryBuilder, pageSize = 1000) {
+  const allRows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await queryBuilder
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) break;
+
+    allRows.push(...data);
+
+    if (data.length < pageSize) break;
+
+    from += pageSize;
+  }
+
+  return {
+    data: allRows,
+    error: null
+  };
+}
+
+
 async function fetchTablesFromSupabase(uid) {
-  const [tasksR, eventsR, remindersR, logR, cfgR, timerR] = await Promise.all([
-    supabaseClient.from('tasks').select('*').eq('user_id', uid),
-    supabaseClient.from('events').select('*').eq('user_id', uid),
-    supabaseClient.from('reminders').select('*').eq('user_id', uid),
-    supabaseClient.from('log').select('*').eq('user_id', uid),
-    supabaseClient.from('user_config').select('*').eq('user_id', uid).maybeSingle(),
-    supabaseClient.from('active_timer').select('*').eq('user_id', uid).maybeSingle(),
+
+  const [
+    tasksR,
+    eventsR,
+    remindersR,
+    logR,
+    cfgR,
+    timerR
+  ] = await Promise.all([
+
+    fetchAllRows(
+      supabaseClient
+        .from('tasks')
+        .select('*')
+        .eq('user_id', uid)
+    ),
+
+    fetchAllRows(
+      supabaseClient
+        .from('events')
+        .select('*')
+        .eq('user_id', uid)
+    ),
+
+    fetchAllRows(
+      supabaseClient
+        .from('reminders')
+        .select('*')
+        .eq('user_id', uid)
+    ),
+
+    fetchAllRows(
+      supabaseClient
+        .from('log')
+        .select('*')
+        .eq('user_id', uid)
+    ),
+
+    supabaseClient
+      .from('user_config')
+      .select('*')
+      .eq('user_id', uid)
+      .maybeSingle(),
+
+    supabaseClient
+      .from('active_timer')
+      .select('*')
+      .eq('user_id', uid)
+      .maybeSingle()
+
   ]);
-  for (const r of [tasksR, eventsR, remindersR, logR, cfgR, timerR]) {
+
+  for (const r of [cfgR, timerR]) {
     if (r.error) throw r.error;
   }
-  return { tasksR, eventsR, remindersR, logR, cfgR, timerR };
+
+  return {
+    tasksR,
+    eventsR,
+    remindersR,
+    logR,
+    cfgR,
+    timerR
+  };
 }
 
 async function loadFromSheets(opts) {
@@ -582,8 +693,23 @@ async function loadFromSheets(opts) {
 
 async function manualSync() {
   toast('Sincronizando…', 'success');
+
   const ok = await pushToSheets({ manual: true });
-  if (ok) await loadFromSheets({ silent: true, force: true });
+
+  if (ok) {
+    const { data, error, count } = await supabaseClient
+      .from('tasks')
+      .select('id,name', { count: 'exact' })
+      .eq('user_id', currentUser.id);
+
+    console.log('[MANUAL SYNC POST-PUSH]', {
+      ok,
+      recibidas: data?.length,
+      countExact: count,
+      prueba005: data?.filter(t => t.name === 'PRUEBA SQL 005').length,
+      error
+    });
+  }
 }
 
 // ── REALTIME: cambios en otro dispositivo llegan al instante ──
@@ -592,6 +718,7 @@ function stopRealtime() {
   realtimeChannels = [];
 }
 
+ownPushIgnoreUntil = Date.now() + 10000;
 function startRealtime() {
   if (!supabaseClient || !currentUser) return;
   stopRealtime();
@@ -599,23 +726,37 @@ function startRealtime() {
 
   // Debounce: juntar varios avisos en uno
   let realtimeDebounceTimer = null;
-  function onRemoteChange(payload) {
-    console.log('[RT]', payload.table, payload.eventType);
+function onRemoteChange(payload) {
+  console.log('[RT]', payload.table, payload.eventType);
 
-    // Eco propio: ignorar cambios que se originan en este dispositivo
-    if (Date.now() - lastPushAt < 1200) {
-      console.log('[RT] Ignorado (eco propio)');
-      return;
+    // Los DELETE/INSERT generados por nuestro propio save_full_state
+    // no deben provocar un pull remoto.
+    if (ownPushActive || pushInFlight || Date.now() < ownPushIgnoreUntil) {
+        return;
     }
 
-    clearTimeout(realtimeDebounceTimer);
-    realtimeDebounceTimer = setTimeout(() => {
-      if (safeToAutoPull()) {
-        console.log('[RT] Refrescando desde Supabase…');
-        loadFromSheets({ silent: true });
-      }
-    }, 800);
+  if (Date.now() - lastPushAt < 1200) {
+    console.log('[RT] Ignorado (eco propio)');
+    return;
   }
+
+  clearTimeout(realtimeDebounceTimer);
+
+  realtimeDebounceTimer = setTimeout(() => {
+
+    console.log('[RT] TIMER EJECUTADO', {
+      tareasAntesDelPull: state.tasks.length,
+      tienePrueba2: state.tasks.some(t => t.id === 'msrl963gtu48'),
+      safe: safeToAutoPull()
+    });
+
+    if (safeToAutoPull()) {
+      console.log('[RT] Refrescando desde Supabase…');
+      loadFromSheets({ silent: true });
+    }
+
+  }, 800);
+}
 
   const tables = ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'];
   tables.forEach(table => {
