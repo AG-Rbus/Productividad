@@ -46,34 +46,21 @@ let state = {
 // ───────────────────────────────────────────
 // SUPABASE — backend compartido, datos separados por cuenta
 // ───────────────────────────────────────────
-// Un solo proyecto de Supabase para todo el equipo. Cada persona
-// inicia sesión con su email/contraseña y "Row Level Security" en
-// la base de datos hace que cada una vea y edite SOLO sus propias
-// filas — automáticamente, sin tener que configurar nada más.
-//
-// SUPABASE_URL y SUPABASE_ANON_KEY son públicos (no son secretos:
-// están pensados para ir embebidos en el código del cliente). Lo que
-// protege los datos de cada usuario es la Row Level Security definida
-// en schema.sql, no ocultar estos valores.
+// SUPABASE_URL y SUPABASE_ANON_KEY son públicos (están pensados para ir
+// embebidos en el cliente). Lo que protege los datos de cada usuario es
+// la Row Level Security definida en supabase/schema.sql.
 const SUPABASE_URL = 'https://scfeluwbaanzxataizbz.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_slMXuckeD-_SWT6T7OLfBA_bg0pe5V8';
 
-const supabaseClient = (SUPABASE_URL.includes('TU-PROYECTO'))
+const supabaseClient = (SUPABASE_URL.includes('TU-PROYECTO') || !window.supabase)
   ? null
   : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let currentUser = null;      // { id, email }
+let currentUser = null;      // { id, email, name }
 let authMode = 'login';      // 'login' | 'signup'
 let realtimeChannels = [];
 
 let syncState = { status: 'idle', lastSync: null, lastError: null };
-let syncDebounceTimer = null;
-let isApplyingRemoteState = false;
-let pushInFlight = false;   // true mientras hay un push a Supabase en curso
-let ownPushIgnoreUntil = 0;
-let ownPushActive = false;
-let hasPendingLocalChange = false; // true si hay un cambio local sin confirmar todavía en Supabase
-let lastPushAt = 0;         // timestamp del último push propio exitoso (para ignorar el eco de Realtime)
 const LOCAL_CACHE_KEY = 'workflow_v2';
 
 function sheetsEnabled() {
@@ -120,11 +107,10 @@ async function handleAuthSubmit() {
       if (data.user && !data.session) {
         errEl.style.color = 'var(--accent)';
         errEl.textContent = '✓ Cuenta creada. Revisá tu email para confirmarla y después iniciá sesión.';
-        btn.disabled = false;
         return;
       }
     }
-    // El listener de abajo se encarga de cerrar el gate y cargar los datos
+    // El listener onAuthStateChange se encarga de cerrar el gate y cargar los datos
   } catch (err) {
     errEl.style.color = 'var(--red)';
     errEl.textContent = err.message || 'Error al iniciar sesión';
@@ -148,75 +134,50 @@ function openAuthGateForLogin() {
   showAuthGate();
 
   const emailInput = document.getElementById('authEmail');
-  if (emailInput) {
-    setTimeout(() => {
-      emailInput.focus();
-      emailInput.select();
-    }, 50);
-  }
+  if (emailInput) setTimeout(() => { emailInput.focus(); emailInput.select(); }, 50);
 }
 
 function updateAuthActionButton() {
   const btn = document.getElementById('authActionBtn');
   if (!btn) return;
-
   if (currentUser) {
     btn.textContent = 'Cerrar sesión';
     btn.className = 'btn btn-red btn-sm';
-    btn.onclick = () => handleAuthAction();
   } else {
     btn.textContent = 'Iniciar sesión';
     btn.className = 'btn btn-accent btn-sm';
-    btn.onclick = () => handleAuthAction();
   }
+  btn.onclick = () => handleAuthAction();
 }
 
 function handleAuthAction() {
-  if (currentUser) {
-    signOut();
-  } else {
-    openAuthGateForLogin();
-  }
+  if (currentUser) signOut();
+  else openAuthGateForLogin();
 }
 
 async function signOut() {
   if (!supabaseClient) return;
-
-  // Mostrar overlay INMEDIATAMENTE para que el usuario vea feedback
-  showLoadingOverlay('Cerrando sesión…', 'Guardando cambios locales');
-
+  showLoadingOverlay('Cerrando sesión…', 'Guardando cambios pendientes');
   try {
-    // 1) Si hay un push pendiente, intentamos subirlo antes de cerrar
-    //    (no es bloqueante: si falla, los datos quedan en localStorage)
-    if (hasPendingLocalChange && sheetsEnabled()) {
-      await pushToSheets().catch(() => {});
+    // Subimos lo pendiente antes de cerrar (si falla, se pierde sólo
+    // lo que no se llegó a subir; avisamos).
+    if (sheetsEnabled() && computeDiff().count > 0) {
+      const ok = await pushToSheets();
+      if (!ok) toast('⚠ Algunos cambios no se pudieron subir antes de cerrar sesión', 'warn');
     }
-
-    // 2) Cerrar sesión en Supabase
     await supabaseClient.auth.signOut();
-    // onSignedOut se va a disparar solo desde el listener
   } catch (err) {
     console.error('Error al cerrar sesión:', err);
     toast('Error al cerrar sesión', 'warn');
   } finally {
-    // Pequeña pausa para que el usuario perciba el cambio
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 300));
     hideLoadingOverlay();
   }
 }
 
-function showAuthGate() {
-  document.getElementById('authGate').classList.add('open');
-}
-function hideAuthGate() {
-  document.getElementById('authGate').classList.remove('open');
-}
+function showAuthGate() { document.getElementById('authGate').classList.add('open'); }
+function hideAuthGate() { document.getElementById('authGate').classList.remove('open'); }
 
-// Se llama SOLO cuando de verdad hay que (re)cargar los datos de la
-// cuenta: al abrir la app con sesión ya iniciada, o justo después de
-// loguearse. NO se llama en cada renovación automática del token.
-
-let isInitialSyncComplete = false;
 const loadingOverlay = document.getElementById('loadingOverlay');
 const loadingText    = document.querySelector('#loadingOverlay .loading-text');
 const loadingSub     = document.getElementById('loadingSub');
@@ -226,78 +187,67 @@ function showLoadingOverlay(msg, sub) {
   if (loadingSub && sub)  loadingSub.textContent  = sub;
   if (loadingOverlay)     loadingOverlay.classList.add('visible');
 }
-
 function hideLoadingOverlay() {
   if (loadingOverlay) loadingOverlay.classList.remove('visible');
 }
 
+function setCurrentUser(session) {
+  const email = session.user.email || '';
+  currentUser = { id: session.user.id, email, name: email.split('@')[0] };
+}
+
+// Se llama al abrir la app con sesión ya iniciada o justo después de
+// loguearse. Es idempotente: si ya estamos inicializados para ese
+// usuario no hace nada (Supabase a veces emite SIGNED_IN repetido).
+let signedInUid = null;
 async function onSignedIn(session) {
-  const userName = session.user.email.split('@')[0];
-  currentUser = { id: session.user.id, email: session.user.email, name: userName };
+  if (signedInUid === session.user.id) { setCurrentUser(session); return; }
+  signedInUid = session.user.id;
+  setCurrentUser(session);
   hideAuthGate();
   document.getElementById('headerUserEmail').textContent = currentUser.email;
   document.getElementById('datosUserEmail').textContent  = currentUser.email;
   document.title = `${currentUser.name} - Productividad`;
   updateAuthActionButton();
 
-  // Ya tenemos datos en localStorage desde load() al iniciar la app.
-  // Mostramos eso YA (sin overlay bloqueante) y sincronizamos en
-  // segundo plano. El overlay se muestra solo brevemente, con un
-  // tope máximo, para no dejar al usuario esperando una conexión lenta.
-  const hasLocalCache = !!localStorage.getItem(LOCAL_CACHE_KEY);
+  ensureSnapshotForUser(currentUser.id);
+  renderAll();
 
-  if (hasLocalCache) {
-    // Datos locales ya están renderizados desde el arranque de la app.
-    // No bloqueamos: dejamos la sincronización correr en background.
-    isInitialSyncComplete = true; // el estado local es válido para operar
-    renderSyncIndicator();
-    syncPendingSince(); // ver función nueva abajo
+  const hasLocalData = state.tasks.length || state.events.length || state.reminders.length || state.log.length;
+  if (hasLocalData) {
+    // Hay datos locales: los mostramos YA y sincronizamos en segundo plano.
+    loadFromSheets({ silent: true }).then(ok => {
+      if (ok && state.config?.theme) applyTheme(state.config.theme === 'light');
+    });
   } else {
-    // Sin caché local (primer login en este dispositivo): ahí sí
-    // necesitamos esperar los datos, pero con un tope de tiempo.
-    showLoadingOverlay('Sincronizando con Supabase…', 'No cierres esta ventana');
+    // Primer login en este dispositivo: esperamos los datos (tope 8s).
+    showLoadingOverlay('Sincronizando…', 'Bajando tus datos');
     await Promise.race([
-      loadFromSheets({ silent: true, force: true }),
-      new Promise(resolve => setTimeout(resolve, 6000)) // tope de 6s
+      loadFromSheets({ silent: true }),
+      new Promise(resolve => setTimeout(resolve, 8000))
     ]);
-    isInitialSyncComplete = true;
     hideLoadingOverlay();
+    if (state.config?.theme) applyTheme(state.config.theme === 'light');
   }
 
   startRealtime();
 }
 
-// Sincroniza en segundo plano tras un login con caché local ya
-// disponible. Si tarda, no bloquea nada: cuando termina, loadFromSheets
-// ya se encarga de renderAll() y aplicar el tema remoto si corresponde.
-async function syncPendingSince() {
-  const success = await loadFromSheets({ silent: true, force: true });
-  if (success && state.config?.theme) {
-    applyTheme(state.config.theme === 'light');
-  }
-  if (!success) {
-    console.warn('[Sync] No se pudo sincronizar al iniciar sesión, usando caché local por ahora.');
-  }
-}
-
-
 function onSignedOut() {
   currentUser = null;
-  isInitialSyncComplete = false;
+  signedInUid = null;
   clearTimeout(syncDebounceTimer);
-  realtimeChannels.forEach(ch => { try { supabaseClient.removeChannel(ch); } catch(e){} });
-  realtimeChannels = [];
+  stopRealtime();
 
   // Limpiar TODO el estado visible para que no quede nada de la cuenta anterior
-  state = {
-    tasks: [],
-    events: [],
-    reminders: [],
-    log: [],
-    activeTimer: null,
-  };
+  state = { tasks: [], events: [], reminders: [], log: [], activeTimer: null };
   applyDefaults();
-  localStorage.removeItem(LOCAL_CACHE_KEY);  // ← clave: borra el caché de la cuenta anterior
+  synced = emptySnapshot(null);
+  initialPullDone = false;
+  try {
+    localStorage.removeItem(LOCAL_CACHE_KEY);
+    localStorage.removeItem(SNAPSHOT_KEY);
+  } catch (e) {}
 
   const headerUserEmail = document.getElementById('headerUserEmail');
   const datosUserEmail = document.getElementById('datosUserEmail');
@@ -310,74 +260,128 @@ function onSignedOut() {
   setSyncStatus('disabled');
 }
 
-// ── scheduleSyncToSheets (REEMPLAZÁ el tuyo) ──
-function scheduleSyncToSheets() {
-  if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
-  if (!isInitialSyncComplete) {
-    console.warn('Push bloqueado: carga inicial no completada');
-    return;
-  }
-
-  // Marcar SIEMPRE, incluso si hay un pull en curso, para que ese
-  // pull sepa que debe descartar lo que trajo al terminar.
-  hasPendingLocalChange = true;
-
-  if (isApplyingRemoteState) {
-    // No programamos el push todavía: cuando el pull termine,
-    // loadFromSheets va a ver hasPendingLocalChange=true, descartar
-    // sus datos, y hay que asegurarse de reprogramar el push ahí.
-    return;
-  }
-
-  clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => pushToSheets(), 1200);
-}
-
 if (supabaseClient) {
-  // Carga inicial: única vez que se dispara sin importar nada más.
   supabaseClient.auth.getSession().then(({ data }) => {
     if (data.session) onSignedIn(data.session);
-    else {
-      showAuthGate();
-      updateAuthActionButton();
-    }
+    else { showAuthGate(); updateAuthActionButton(); setSyncStatus('disabled'); }
   });
 
-  // Eventos posteriores: OJO acá es donde estaba el bug. Supabase emite
-  // eventos como TOKEN_REFRESHED cada ~1 hora en segundo plano, y antes
-  // esto disparaba una recarga completa de datos que pisaba cualquier
-  // cambio reciente que todavía no se hubiera sincronizado (por eso
-  // reaparecían tareas recién completadas, o se "reseteaba" el timer).
-  // Ahora SOLO recargamos datos en un login/logout real.
-  let lastKnownUserId = null;
+  // TOKEN_REFRESHED / USER_UPDATED sólo renuevan el usuario interno:
+  // nunca recargan datos (antes eso pisaba cambios sin subir).
   supabaseClient.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT' || !session) {
-      lastKnownUserId = null;
-      onSignedOut();
+      if (signedInUid) onSignedOut();
       return;
     }
-    if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
-      // Solo actualizamos el usuario/token interno, sin recargar datos.
-      currentUser = { id: session.user.id, email: session.user.email };
-      return;
-    }
-    // SIGNED_IN: puede ser un login real, o Supabase re-emitiendo el
-    // mismo evento para la misma sesión (pasa al volver a una pestaña).
-    // Solo recargamos si el usuario logueado cambió de verdad.
-    if (session.user.id !== lastKnownUserId) {
-      lastKnownUserId = session.user.id;
+    if (event === 'SIGNED_IN' && session.user.id !== signedInUid) {
       onSignedIn(session);
-    } else {
-      currentUser = { id: session.user.id, email: session.user.email };
+      return;
     }
+    setCurrentUser(session);
   });
 } else {
-  console.warn('Supabase no está configurado todavía (ver SUPABASE_URL/SUPABASE_ANON_KEY en index.js)');
+  console.warn('Supabase no está configurado (ver SUPABASE_URL/SUPABASE_ANON_KEY en index.js)');
 }
 
-// ── DATOS: subir / bajar ──────────────────
+// ═══════════════════════════════════════════
+// SINCRONIZACIÓN
+// ═══════════════════════════════════════════
+// Modelo anterior: cada cambio subía TODO el estado y la base borraba y
+// reinsertaba todas las filas (save_full_state). Con dos dispositivos
+// abiertos, el que tenía datos viejos pisaba al otro (tareas que
+// desaparecían / reaparecían), y cada push generaba cientos de eventos
+// DELETE+INSERT en Realtime que disparaban pulls a mitad de camino.
+//
+// Modelo nuevo (por registro):
+//  · `synced` guarda cómo está cada registro en el servidor según lo
+//    último que sabemos (snapshot). Se persiste en localStorage.
+//  · Subir = comparar `state` contra el snapshot y mandar sólo lo que
+//    cambió (upsert) o se borró (delete por id).
+//  · Bajar = merge registro por registro: si un registro tiene cambios
+//    locales sin subir, gana el local; si no, gana el servidor.
+//  · Realtime aplica cada fila que llega con la misma regla, sin hacer
+//    un pull completo.
+const COLLECTIONS = ['tasks', 'events', 'reminders', 'log'];
+const SNAPSHOT_KEY = 'workflow_v2_synced';
+const SKIPCOLS_KEY = 'workflow_v2_skipcols';
+const LOG_MAX = 3000;
 
-// solo permite push cuando sepamos que el estado local
+let synced = emptySnapshot(null);
+let initialPullDone = false;    // al menos un pull exitoso en esta sesión
+let syncDebounceTimer = null;
+let pushInFlight = false;
+let pushAgain = false;
+let pushSeq = 0;                // se incrementa en cada push (para invalidar pulls viejos)
+let pullInFlight = null;        // promesa del pull en curso
+let pullAgain = false;
+let retryDelay = 0;
+let lastPullAt = 0;
+let hasPendingLocalChange = false;
+
+// Columnas que la base todavía no tiene (por ejemplo si no se corrió la
+// migración del kanban). Se quitan antes de subir y se conservan localmente.
+let skippedColumns = {};
+try { skippedColumns = JSON.parse(localStorage.getItem(SKIPCOLS_KEY) || '{}'); } catch (e) {}
+
+function emptySnapshot(uid) {
+  return { uid, migrated: false, tasks: {}, events: {}, reminders: {}, log: {}, config: null, timer: null };
+}
+
+// Serialización estable: claves ordenadas, sin null/undefined ni claves
+// internas (_xxx). Dos registros "iguales" dan siempre el mismo string.
+function norm(v) {
+  if (v === null || v === undefined) return 'null';
+  if (Array.isArray(v)) return '[' + v.map(norm).join(',') + ']';
+  if (typeof v === 'object') {
+    const keys = Object.keys(v).filter(k => v[k] !== null && v[k] !== undefined && k[0] !== '_' && k !== 'user_id').sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + norm(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v);
+}
+
+function saveSnapshot() {
+  try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(synced)); } catch (e) {}
+}
+
+function loadSnapshot() {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if (raw) synced = { ...emptySnapshot(null), ...JSON.parse(raw) };
+  } catch (e) { synced = emptySnapshot(null); }
+}
+
+// Si el snapshot es de otro usuario (o no existe: primera vez con esta
+// versión), el próximo pull hace una "migración": el servidor manda.
+function ensureSnapshotForUser(uid) {
+  if (synced.uid !== uid) {
+    synced = emptySnapshot(uid);
+    saveSnapshot();
+  }
+}
+
+function computeDiff() {
+  const d = { upserts: {}, deletes: {}, config: null, timer: null, count: 0 };
+  if (!synced.migrated) return d; // hasta el primer pull no sabemos qué hay en el servidor
+  for (const c of COLLECTIONS) {
+    const snap = synced[c] || {};
+    const seen = new Set();
+    const ups = [];
+    for (const rec of state[c] || []) {
+      if (!rec || !rec.id || seen.has(rec.id)) continue;
+      seen.add(rec.id);
+      const s = norm(rec);
+      if (snap[rec.id] !== s) ups.push({ rec, s });
+    }
+    const dels = Object.keys(snap).filter(id => !seen.has(id));
+    if (ups.length) { d.upserts[c] = ups; d.count += ups.length; }
+    if (dels.length) { d.deletes[c] = dels; d.count += dels.length; }
+  }
+  const cfg = norm(state.config || {});
+  if (cfg !== synced.config) { d.config = cfg; d.count++; }
+  const tmr = norm(state.activeTimer || null);
+  if (tmr !== synced.timer) { d.timer = tmr; d.count++; }
+  return d;
+}
 
 function applyDefaults() {
   if (!state.tasks) state.tasks = [];
@@ -386,67 +390,75 @@ function applyDefaults() {
   if (!state.log) state.log = [];
   if (!state.config) state.config = { regenHour: '07:00', lastRegen: null, skipWeekends: true };
   if (state.config.skipWeekends === undefined) state.config.skipWeekends = true;
+  if (state.activeTimer === undefined) state.activeTimer = null;
+  // Protección: nunca dos registros con el mismo id en una colección
+  for (const c of COLLECTIONS) {
+    const seen = new Set();
+    state[c] = state[c].filter(r => r && r.id && !seen.has(r.id) && seen.add(r.id));
+  }
 }
 
 function load() {
-  // 1) Caché local: instantáneo, nunca falla, evita pantallas vacías.
-  const raw = localStorage.getItem(LOCAL_CACHE_KEY);
-  if (raw) {
-    try { state = { ...state, ...JSON.parse(raw) }; } catch(e) {}
-  }
+  // Caché local: instantáneo, nunca falla, evita pantallas vacías.
+  try {
+    const raw = localStorage.getItem(LOCAL_CACHE_KEY);
+    if (raw) state = { ...state, ...JSON.parse(raw) };
+  } catch (e) {}
   applyDefaults();
+  loadSnapshot();
+}
+
+function saveLocalOnly() {
+  try { localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); } catch (e) {}
 }
 
 function save() {
-  // Guardado local SIEMPRE primero (síncrono, no depende de la red).
-  try { localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); } catch(e) {}
+  if (state.log.length > LOG_MAX) state.log = state.log.slice(0, LOG_MAX);
+  saveLocalOnly();           // siempre primero, síncrono, sin red
   scheduleSyncToSheets();
 }
 
-function scheduleSyncToSheets() {
-  if (!sheetsEnabled()) {
-    setSyncStatus('disabled');
-    return;
-  }
-
-  if (!isInitialSyncComplete) {
-    console.warn('Sincronización en pausa: carga inicial en curso');
-    return;
-  }
-
+function scheduleSyncToSheets(delay) {
+  if (!sheetsEnabled()) { setSyncStatus('disabled'); return; }
   hasPendingLocalChange = true;
-
-  // DEBUG TEMPORAL
-  console.log('[DEBUG SYNC]', {
-    tareasAlProgramar: state.tasks.length,
-    ultima: state.tasks[state.tasks.length - 1]?.name
-  });
-
-  if (isApplyingRemoteState) {
-    return;
-  }
-
+  renderSyncIndicator();
   clearTimeout(syncDebounceTimer);
-
-  syncDebounceTimer = setTimeout(() => {
-    console.log('[DEBUG SYNC]', {
-      tareasAlEjecutarPush: state.tasks.length,
-      ultima: state.tasks[state.tasks.length - 1]?.name
-    });
-
-    pushToSheets();
-  }, 1200);
+  syncDebounceTimer = setTimeout(() => pushToSheets(), delay ?? 800);
 }
 
+function stripSkipped(table, rec) {
+  const skip = skippedColumns[table] || [];
+  const row = {};
+  for (const k of Object.keys(rec)) {
+    if (k[0] === '_' || skip.includes(k)) continue;
+    row[k] = rec[k];
+  }
+  return row;
+}
 
-// Sube TODO el estado en una sola llamada a una función de la base de
-// datos (save_full_state, ver schema.sql) que hace el reemplazo dentro
-// de una única transacción: o se guarda todo, o no se guarda nada — a
-// diferencia del enfoque anterior (borrar tabla por tabla y reinsertar
-// desde el navegador), que podía dejar datos borrados a mitad de camino
-// si algo fallaba en el medio.
-let pendingPush = false;
+async function upsertRows(table, rows, onConflict) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const payload = rows.map(r => ({ ...stripSkipped(table, r), user_id: currentUser.id }));
+    const { error } = await supabaseClient.from(table).upsert(payload, { onConflict });
+    if (!error) return;
+    // Columna inexistente en la base → la salteamos y reintentamos
+    const m = /'([^']+)' column/.exec(error.message || '');
+    if ((error.code === 'PGRST204' || /column/i.test(error.message || '')) && m) {
+      skippedColumns[table] = [...new Set([...(skippedColumns[table] || []), m[1]])];
+      try { localStorage.setItem(SKIPCOLS_KEY, JSON.stringify(skippedColumns)); } catch (e) {}
+      console.warn(`[Sync] La tabla ${table} no tiene la columna "${m[1]}". Se guarda sólo localmente. Corré supabase/migracion_kanban.sql.`);
+      continue;
+    }
+    throw error;
+  }
+  throw new Error('Demasiadas columnas desconocidas en ' + table);
+}
 
+function chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
 
 async function pushToSheets(opts) {
   opts = opts || {};
@@ -454,153 +466,159 @@ async function pushToSheets(opts) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
     return false;
   }
-
-  if (pushInFlight) {
-    pendingPush = true;
-    if (opts.manual) toast('Sincronización en cola…', 'success');
+  if (!synced.migrated) {
+    // Todavía no hicimos el primer pull: subir ahora podría resucitar
+    // datos viejos. El pull reprograma el push al terminar.
+    if (!pullInFlight) loadFromSheets({ silent: true });
     return false;
+  }
+  if (pushInFlight) { pushAgain = true; return false; }
+
+  const d = computeDiff();
+  if (d.count === 0) {
+    hasPendingLocalChange = false;
+    setSyncStatus('synced');
+    return true;
   }
 
   pushInFlight = true;
-  ownPushActive = true;
+  pushSeq++;
   setSyncStatus('syncing');
+  const uid = currentUser.id;
 
   try {
-    const { error } = await supabaseClient.rpc('save_full_state', {
-      p_tasks: state.tasks,
-      p_events: state.events,
-      p_reminders: state.reminders,
-      p_log: state.log,
-      p_config: state.config || {},
-      p_active_timer: state.activeTimer || null,
-    });
-
-    if (error) throw error;
-
-    hasPendingLocalChange = false;
-    lastPushAt = Date.now();
-    setSyncStatus('synced');
-
-    if (opts.manual) toast('✓ Sincronizado con Supabase', 'success');
-    return true;
-
-  } catch (err) {
-    setSyncStatus('error', err.message || String(err));
-
-    if (opts.manual) {
-      toast(
-        '⚠ No se pudo sincronizar: ' + (err.message || err),
-        'warn'
-      );
-    }
-
-    return false;
-
-  } finally {
-    pushInFlight = false;
-    ownPushActive = false;
-
-    if (pendingPush) {
-      pendingPush = false;
-
-      if (hasPendingLocalChange) {
-        setTimeout(() => pushToSheets(opts), 0);
+    for (const c of COLLECTIONS) {
+      for (const part of chunk(d.upserts[c] || [], 400)) {
+        await upsertRows(c, part.map(u => u.rec), 'user_id,id');
+        part.forEach(u => { synced[c][u.rec.id] = u.s; });
+      }
+      for (const ids of chunk(d.deletes[c] || [], 200)) {
+        const { error } = await supabaseClient.from(c).delete().eq('user_id', uid).in('id', ids);
+        if (error) throw error;
+        ids.forEach(id => { delete synced[c][id]; });
       }
     }
+    if (d.config !== null) {
+      await upsertRows('user_config', [{ config: state.config || {} }], 'user_id');
+      synced.config = d.config;
+    }
+    if (d.timer !== null) {
+      await upsertRows('active_timer', [{ timer: state.activeTimer || null }], 'user_id');
+      synced.timer = d.timer;
+    }
+    saveSnapshot();
+    retryDelay = 0;
+    hasPendingLocalChange = computeDiff().count > 0;
+    setSyncStatus('synced');
+    if (opts.manual) toast('✓ Sincronizado', 'success');
+    return true;
+  } catch (err) {
+    saveSnapshot(); // lo que sí se subió queda registrado
+    console.error('[Sync] push falló:', err);
+    setSyncStatus('error', err.message || String(err));
+    if (opts.manual) toast('⚠ No se pudo sincronizar: ' + (err.message || err), 'warn');
+    // Reintento con espera creciente (5s, 10s, 20s… hasta 60s)
+    retryDelay = Math.min(retryDelay ? retryDelay * 2 : 5000, 60000);
+    clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(() => pushToSheets(), retryDelay);
+    return false;
+  } finally {
+    pushInFlight = false;
+    if (pushAgain) {
+      pushAgain = false;
+      clearTimeout(syncDebounceTimer);
+      syncDebounceTimer = setTimeout(() => pushToSheets(), 50);
+    }
   }
 }
 
-async function fetchAllRows(queryBuilder, pageSize = 1000) {
-  const allRows = [];
-  let from = 0;
-
-  while (true) {
-    const { data, error } = await queryBuilder
+async function fetchAllRows(table, uid, pageSize = 1000) {
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabaseClient
+      .from(table).select('*').eq('user_id', uid)
+      .order('id', { ascending: true })
       .range(from, from + pageSize - 1);
-
     if (error) throw error;
-
-    if (!data || data.length === 0) break;
-
-    allRows.push(...data);
-
+    if (!data || !data.length) break;
+    all.push(...data);
     if (data.length < pageSize) break;
-
-    from += pageSize;
   }
-
-  return {
-    data: allRows,
-    error: null
-  };
+  return all;
 }
-
 
 async function fetchTablesFromSupabase(uid) {
-
-  const [
-    tasksR,
-    eventsR,
-    remindersR,
-    logR,
-    cfgR,
-    timerR
-  ] = await Promise.all([
-
-    fetchAllRows(
-      supabaseClient
-        .from('tasks')
-        .select('*')
-        .eq('user_id', uid)
-    ),
-
-    fetchAllRows(
-      supabaseClient
-        .from('events')
-        .select('*')
-        .eq('user_id', uid)
-    ),
-
-    fetchAllRows(
-      supabaseClient
-        .from('reminders')
-        .select('*')
-        .eq('user_id', uid)
-    ),
-
-    fetchAllRows(
-      supabaseClient
-        .from('log')
-        .select('*')
-        .eq('user_id', uid)
-    ),
-
-    supabaseClient
-      .from('user_config')
-      .select('*')
-      .eq('user_id', uid)
-      .maybeSingle(),
-
-    supabaseClient
-      .from('active_timer')
-      .select('*')
-      .eq('user_id', uid)
-      .maybeSingle()
-
+  const [tasks, events, reminders, log, cfgR, timerR] = await Promise.all([
+    fetchAllRows('tasks', uid),
+    fetchAllRows('events', uid),
+    fetchAllRows('reminders', uid),
+    fetchAllRows('log', uid),
+    supabaseClient.from('user_config').select('*').eq('user_id', uid).maybeSingle(),
+    supabaseClient.from('active_timer').select('*').eq('user_id', uid).maybeSingle(),
   ]);
+  if (cfgR.error) throw cfgR.error;
+  if (timerR.error) throw timerR.error;
+  return { tasks, events, reminders, log, config: cfgR.data ? cfgR.data.config : undefined, timer: timerR.data ? timerR.data.timer : undefined };
+}
 
-  for (const r of [cfgR, timerR]) {
-    if (r.error) throw r.error;
+function stripRow(row) {
+  const { user_id, ...rest } = row;
+  return rest;
+}
+
+// Merge de una colección. Devuelve el nuevo array local y el snapshot.
+function mergeCollection(c, remoteRows, mode) {
+  const snap = synced[c] || {};
+  const local = state[c] || [];
+  const localById = new Map(local.map(r => [r.id, r]));
+  const remoteIds = new Set();
+  const out = [];
+  const newSnap = {};
+
+  for (const row of remoteRows) {
+    const rec = stripRow(row);
+    if (!rec.id || remoteIds.has(rec.id)) continue;
+    remoteIds.add(rec.id);
+    const loc = localById.get(rec.id);
+    // {...loc, ...rec}: conserva campos que la base no tiene como columna
+    const merged = loc ? { ...loc, ...rec } : rec;
+    newSnap[rec.id] = norm(merged);
+    const known = Object.prototype.hasOwnProperty.call(snap, rec.id);
+    const localDirty = mode === 'normal' && (loc ? norm(loc) !== snap[rec.id] : known);
+    if (localDirty) {
+      if (loc) out.push(loc);   // cambio local sin subir: gana el local
+      // (si !loc es un borrado local pendiente: no lo agregamos)
+    } else {
+      out.push(merged);
+    }
   }
 
-  return {
-    tasksR,
-    eventsR,
-    remindersR,
-    logR,
-    cfgR,
-    timerR
-  };
+  for (const loc of local) {
+    if (remoteIds.has(loc.id)) continue;
+    const known = Object.prototype.hasOwnProperty.call(snap, loc.id);
+    if (mode === 'keepLocal') out.push(loc);          // servidor vacío: subimos lo local
+    else if (mode === 'normal' && !known) out.push(loc); // creado acá, todavía no subido
+    // si era conocido y ya no está en el servidor → se borró en otro dispositivo
+  }
+
+  if (c === 'log') out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  return { out, newSnap };
+}
+
+// Merge de config / timer (una fila por usuario)
+function mergeSingle(key, remoteVal, mode) {
+  if (remoteVal === undefined) return; // no hay fila en el servidor: se subirá la local
+  const stateKey = key === 'config' ? 'config' : 'activeTimer';
+  const localDirty = mode === 'normal' && synced[key] !== null
+    && norm(key === 'config' ? (state.config || {}) : (state.activeTimer || null)) !== synced[key];
+  if (key === 'config') {
+    const merged = { ...(state.config || {}), ...(remoteVal || {}) };
+    if (localDirty) synced.config = norm(remoteVal || {});
+    else { state.config = merged; synced.config = norm(merged); }
+  } else {
+    if (!localDirty) state[stateKey] = remoteVal || null;
+    synced.timer = norm(remoteVal || null);
+  }
 }
 
 async function loadFromSheets(opts) {
@@ -609,182 +627,156 @@ async function loadFromSheets(opts) {
     if (opts.manual) toast('Iniciá sesión primero', 'warn');
     return false;
   }
+  if (pullInFlight) { pullAgain = true; return pullInFlight; }
 
-  if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
-    return false;
-  }
+  pullInFlight = (async () => {
+    const seqAtStart = pushSeq;
+    setSyncStatus('syncing');
+    try {
+      const uid = currentUser.id;
+      const remote = await fetchTablesFromSupabase(uid);
+      if (!currentUser || currentUser.id !== uid) return false;
 
-  setSyncStatus('syncing');
-  isApplyingRemoteState = true;
+      // Si mientras bajábamos se subió algo, estos datos pueden ser
+      // anteriores a nuestro propio cambio: los descartamos y repetimos.
+      if (pushInFlight || pushSeq !== seqAtStart) { pullAgain = true; return false; }
 
-  try {
-    const uid = currentUser.id;
-    let { tasksR, eventsR, remindersR, logR, cfgR, timerR } = await fetchTablesFromSupabase(uid);
+      const remoteEmpty = !remote.tasks.length && !remote.events.length && !remote.reminders.length && !remote.log.length;
+      let mode = 'normal';
+      if (!synced.migrated) mode = remoteEmpty ? 'keepLocal' : 'remoteWins';
 
-    if (!opts.force && (hasPendingLocalChange || pushInFlight)) {
+      for (const c of COLLECTIONS) {
+        const { out, newSnap } = mergeCollection(c, remote[c], mode);
+        state[c] = out;
+        synced[c] = newSnap;
+      }
+      if (mode !== 'normal') { synced.config = null; synced.timer = null; }
+      mergeSingle('config', remote.config, mode);
+      mergeSingle('timer', remote.timer, mode);
+
+      synced.migrated = true;
+      applyDefaults();
+      saveSnapshot();
+      saveLocalOnly();
+      initialPullDone = true;
+      lastPullAt = Date.now();
+
       setSyncStatus('synced');
-      clearTimeout(syncDebounceTimer);
-      syncDebounceTimer = setTimeout(() => pushToSheets(), 300);
+      if (opts.manual) toast('✓ Datos actualizados', 'success');
+      renderAll();
+
+      // Cambios locales pendientes (o datos locales a migrar) → subir
+      if (computeDiff().count > 0) scheduleSyncToSheets(300);
+      else hasPendingLocalChange = false;
+      return true;
+    } catch (err) {
+      console.error('[Sync] pull falló:', err);
+      setSyncStatus('error', err.message || String(err));
+      if (!opts.silent) toast('⚠ Sin conexión, usando datos guardados localmente', 'warn');
       return false;
     }
+  })();
 
-    const strip = (rows) => (rows || []).map(({ user_id, ...rest }) => rest);
-
-    let tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
-    let eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
-    let remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
-    let logRaw       = logR.data       ? strip(logR.data)       : state.log;
-
-    const localHadData = (state.tasks?.length || 0) > 0
-                        || (state.events?.length || 0) > 0
-                        || (state.reminders?.length || 0) > 0;
-
-    let remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
-                          && remindersRaw.length === 0 && logRaw.length === 0;
-
-    if (remoteLooksEmpty && localHadData && !opts.force) {
-      console.warn('[Sync] Pull sospechoso (todo vacío con datos locales previos). Reintentando…');
-      await new Promise(r => setTimeout(r, 400));
-      const retry = await fetchTablesFromSupabase(uid);
-      tasksR = retry.tasksR; eventsR = retry.eventsR;
-      remindersR = retry.remindersR; logR = retry.logR;
-      cfgR = retry.cfgR; timerR = retry.timerR;
-
-      tasksRaw     = tasksR.data     ? strip(tasksR.data)     : state.tasks;
-      eventsRaw    = eventsR.data    ? strip(eventsR.data)    : state.events;
-      remindersRaw = remindersR.data ? strip(remindersR.data) : state.reminders;
-      logRaw       = logR.data       ? strip(logR.data)       : state.log;
-
-      remoteLooksEmpty = tasksRaw.length === 0 && eventsRaw.length === 0
-                        && remindersRaw.length === 0 && logRaw.length === 0;
-
-      if (remoteLooksEmpty) {
-        console.error('[Sync] Pull vacío confirmado tras reintento. Se descarta para proteger los datos locales.');
-        setSyncStatus('error', 'Se evitó un posible borrado: Supabase devolvió todo vacío');
-        toast('⚠ Se evitó un posible borrado accidental. Tus datos se conservaron localmente. Usá "Sincronizar" para forzarlo si es intencional.', 'warn');
-        return false;
-      }
-    }
-
-    const tasks = tasksRaw, events = eventsRaw, reminders = remindersRaw, log = logRaw;
-    const config    = (cfgR.data && cfgR.data.config)
-                        ? { ...state.config, ...cfgR.data.config }
-                        : state.config;
-    const activeTimer = (timerR.data && timerR.data.timer !== undefined)
-                        ? timerR.data.timer
-                        : state.activeTimer;
-
-    state = { ...state, tasks, events, reminders, log, config, activeTimer };
-    applyDefaults();
-    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state));
-
-    setSyncStatus('synced');
-    if (opts.manual) toast('✓ Datos cargados desde Supabase', 'success');
-    renderAll();
-    return true;
-  } catch (err) {
-    setSyncStatus('error', err.message || String(err));
-    if (!opts.silent) toast('⚠ Sin conexión con Supabase, usando datos guardados localmente', 'warn');
-    return false;
+  try {
+    return await pullInFlight;
   } finally {
-    isApplyingRemoteState = false;
+    pullInFlight = null;
+    if (pullAgain) { pullAgain = false; schedulePull(400); }
   }
+}
+
+let pullTimer = null;
+function schedulePull(delay) {
+  clearTimeout(pullTimer);
+  pullTimer = setTimeout(() => {
+    if (pushInFlight) { schedulePull(500); return; }
+    loadFromSheets({ silent: true });
+  }, delay || 0);
 }
 
 async function manualSync() {
   toast('Sincronizando…', 'success');
-
-  const ok = await pushToSheets({ manual: true });
-
-  if (ok) {
-    const { data, error, count } = await supabaseClient
-      .from('tasks')
-      .select('id,name', { count: 'exact' })
-      .eq('user_id', currentUser.id);
-
-    console.log('[MANUAL SYNC POST-PUSH]', {
-      ok,
-      recibidas: data?.length,
-      countExact: count,
-      prueba005: data?.filter(t => t.name === 'PRUEBA SQL 005').length,
-      error
-    });
-  }
+  if (computeDiff().count > 0) await pushToSheets({ manual: true });
+  await loadFromSheets({ manual: true });
 }
 
 // ── REALTIME: cambios en otro dispositivo llegan al instante ──
+let rtRenderTimer = null;
+function scheduleRtRender() {
+  clearTimeout(rtRenderTimer);
+  rtRenderTimer = setTimeout(() => {
+    if (uiBusy) { scheduleRtRender(); return; }
+    renderAll();
+  }, 150);
+}
+
+function applyRealtimeRow(payload) {
+  if (!currentUser || !synced.migrated) return;
+  const table = payload.table;
+  const type = payload.eventType;
+
+  if (COLLECTIONS.includes(table)) {
+    const snap = synced[table];
+    if (type === 'DELETE') {
+      const id = payload.old && payload.old.id;
+      if (!id) return;
+      if (payload.old.user_id && payload.old.user_id !== currentUser.id) return;
+      const loc = state[table].find(r => r.id === id);
+      const localDirty = loc && norm(loc) !== snap[id];
+      delete snap[id];
+      if (!localDirty) state[table] = state[table].filter(r => r.id !== id);
+    } else {
+      const row = payload.new;
+      if (!row || !row.id || (row.user_id && row.user_id !== currentUser.id)) return;
+      const rec = stripRow(row);
+      const idx = state[table].findIndex(r => r.id === rec.id);
+      const loc = idx >= 0 ? state[table][idx] : null;
+      const known = Object.prototype.hasOwnProperty.call(snap, rec.id);
+      // !loc && known → lo borramos acá y todavía no se subió: no resucitar
+      const localDirty = loc ? norm(loc) !== snap[rec.id] : known;
+      const merged = loc ? { ...loc, ...rec } : rec;
+      snap[rec.id] = norm(merged);
+      if (!localDirty) {
+        if (idx >= 0) state[table][idx] = merged;
+        else if (table === 'log') state.log.unshift(merged);
+        else state[table].push(merged);
+      }
+    }
+  } else if (table === 'active_timer' || table === 'user_config') {
+    const row = payload.new;
+    if (!row || (row.user_id && row.user_id !== currentUser.id)) return;
+    if (table === 'active_timer') mergeSingle('timer', type === 'DELETE' ? null : (row.timer ?? null), 'normal');
+    else if (row.config) mergeSingle('config', row.config, 'normal');
+  } else return;
+
+  saveSnapshot();
+  saveLocalOnly();
+  scheduleRtRender();
+}
+
 function stopRealtime() {
-  realtimeChannels.forEach(ch => supabaseClient.removeChannel(ch));
+  if (!supabaseClient) return;
+  realtimeChannels.forEach(ch => { try { supabaseClient.removeChannel(ch); } catch (e) {} });
   realtimeChannels = [];
 }
 
-ownPushIgnoreUntil = Date.now() + 10000;
 function startRealtime() {
   if (!supabaseClient || !currentUser) return;
   stopRealtime();
   const uid = currentUser.id;
-
-  // Debounce: juntar varios avisos en uno
-  let realtimeDebounceTimer = null;
-function onRemoteChange(payload) {
-  console.log('[RT]', payload.table, payload.eventType);
-
-    // Los DELETE/INSERT generados por nuestro propio save_full_state
-    // no deben provocar un pull remoto.
-    if (ownPushActive || pushInFlight || Date.now() < ownPushIgnoreUntil) {
-        return;
-    }
-
-  if (Date.now() - lastPushAt < 1200) {
-    console.log('[RT] Ignorado (eco propio)');
-    return;
-  }
-
-  clearTimeout(realtimeDebounceTimer);
-
-  realtimeDebounceTimer = setTimeout(() => {
-
-    console.log('[RT] TIMER EJECUTADO', {
-      tareasAntesDelPull: state.tasks.length,
-      tienePrueba2: state.tasks.some(t => t.id === 'msrl963gtu48'),
-      safe: safeToAutoPull()
-    });
-
-    if (safeToAutoPull()) {
-      console.log('[RT] Refrescando desde Supabase…');
-      loadFromSheets({ silent: true });
-    }
-
-  }, 800);
-}
-
-  const tables = ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'];
-  tables.forEach(table => {
-    const ch = supabaseClient
-      .channel('rt-' + table + '-' + uid)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: table,
-          filter: `user_id=eq.${uid}`   // ← mismo formato que tu test
-        },
-        onRemoteChange
-      )
-      .subscribe((status, err) => {
-        console.log(`[RT ${table}] status:`, status);
-        if (err) console.error(`[RT ${table}] error:`, err);
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn(`[RT ${table}] ⚠️ Falló la suscripción`);
-        }
-      });
-    realtimeChannels.push(ch);
+  // Un solo canal con todas las tablas
+  const ch = supabaseClient.channel('rt-all-' + uid);
+  ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'].forEach(table => {
+    ch.on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${uid}` }, applyRealtimeRow);
   });
-
-  console.log('[RT] Suscripciones iniciadas para', tables.length, 'tablas');
+  ch.subscribe((status, err) => {
+    if (err) console.error('[RT] error:', err);
+    // Al (re)conectar hacemos un pull para recuperar lo que se perdió
+    // mientras estuvo desconectado (móvil en segundo plano, etc.)
+    if (status === 'SUBSCRIBED' && initialPullDone) loadFromSheets({ silent: true });
+  });
+  realtimeChannels.push(ch);
 }
-
 
 function setSyncStatus(status, errorMsg) {
   syncState.status = status;
@@ -794,79 +786,48 @@ function setSyncStatus(status, errorMsg) {
 }
 
 function renderSyncIndicator() {
+  const pending = hasPendingLocalChange && syncState.status !== 'syncing';
   const map = {
     idle:     ['●', 'var(--text3)', 'Iniciando…'],
     disabled: ['○', 'var(--text3)', 'Sin sesión (solo local)'],
     syncing:  ['◐', 'var(--amber)', 'Sincronizando…'],
-    synced:   ['●', 'var(--accent)', syncState.lastSync ? 'Sincronizado · ' + syncState.lastSync.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : 'Sincronizado'],
-    error:    ['●', 'var(--red)', 'Sin conexión (usando caché local)'],
+    synced:   ['●', 'var(--accent)', syncState.lastSync ? 'Sincronizado · ' + syncState.lastSync.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) : 'Sincronizado'],
+    error:    ['●', 'var(--red)', 'Sin conexión (cambios guardados en este equipo)'],
   };
-  const [dot, color, label] = map[syncState.status] || map.idle;
-  const html = `<span style="color:${color}">${dot}</span> <span style="color:var(--text3)">${label}</span>`;
-  ['syncIndicator', 'syncIndicatorDatos'].forEach(id => {
+  let [dot, color, label] = map[syncState.status] || map.idle;
+  if (pending && syncState.status === 'synced') { dot = '◐'; color = 'var(--amber)'; label = 'Cambios por subir…'; }
+  const html = `<span style="color:${color}">${dot}</span> <span class="sync-label">${label}</span>`;
+  ['syncIndicator', 'syncIndicatorDatos', 'syncIndicatorDatos2', 'syncIndicatorMobile'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) { el.title = syncState.lastError || ''; el.innerHTML = html; }
+    if (el) { el.title = syncState.lastError || label; el.innerHTML = html; }
   });
+}
+
+// Puesto en true mientras se arrastra una tarjeta: posterga re-renders
+let uiBusy = false;
+
+// Escapa texto del usuario antes de meterlo en HTML
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
-// Ubicación Pomodoro y DropDown (responsive)
-
-
+// Ubicación del Pomodoro (responsive): en pantallas angostas la barra
+// lateral se oculta, así que el pomodoro pasa al Dashboard.
 const pomodoroContainer = document.getElementById('pomodoroMain');
 const pomodoroOriginal = document.getElementById('pomodoroContainer');
 const pomodoroMovil = document.getElementById('pomodoroMovil');
+const mqNarrow = window.matchMedia('(max-width: 1170px)');
 
 function moverPomodoro() {
-  if (window.innerWidth < 1170) {
-    pomodoroMovil.appendChild(pomodoroContainer);
-  } else {
-    pomodoroOriginal.appendChild(pomodoroContainer);
-  }
+  if (!pomodoroContainer || !pomodoroOriginal || !pomodoroMovil) return;
+  const target = mqNarrow.matches ? pomodoroMovil : pomodoroOriginal;
+  if (pomodoroContainer.parentElement !== target) target.appendChild(pomodoroContainer);
 }
+moverPomodoro();
+mqNarrow.addEventListener('change', moverPomodoro);
 
-
-function moverDrop(e) {
-    const elIcon = document.querySelector('.fa-angle-double-down')
-    const icono = document.getElementById("DropBtn");
-    const origen = document.getElementById("dropOrig");
-    const destino = document.getElementById("header-drop");
-
-    if (!icono || !origen || !destino) return;
-
-    if (e.matches) {
-        // Menor o igual a 1170px
-        destino.appendChild(icono);
-        elIcon.classList.remove('oculto')
-
-    } else {
-        // Mayor a 1170px
-        origen.appendChild(icono);
-        elIcon.classList.add('oculto')
-        
-    }
-}
-function hideSide() {
-    const side = document.querySelector(".sidebar");
-    const drop = document.getElementById("dropOrig");
-    const header = document.getElementById("header-drop");
-    if (side.classList.contains("oculto")) {
-        side.prepend(drop);
-        side.classList.remove("oculto");
-    } else {
-        header.appendChild(drop);
-        side.classList.add("oculto");
-    }
-}
-
-const media = window.matchMedia("(max-width: 1170px)");
-
-moverDrop(media);      
-moverPomodoro()
-window.addEventListener('resize', moverPomodoro);        // Estado inicial
-media.addEventListener("change", moverDrop); // Cuando cambia el tamaño
-media.addEventListener("change", hideSide)
 
 // ================================
 // POMODORO (vinculado a la tarea activa)
@@ -992,7 +953,7 @@ function tickPomodoroVinculado() {
 
 // Iniciar
 function iniciarTemporizador() {
-  const sonPom = new Audio('/media/BellSound.mpeg');
+  const sonPom = new Audio('media/BellSound.mpeg');
     if (intervalo) return; // ya está corriendo
 
     // Modo descanso: timer independiente, NO descuenta de tareas
@@ -1001,8 +962,8 @@ function iniciarTemporizador() {
             if (segundosRestantes <= 0) {
                 clearInterval(intervalo);
                 intervalo = null;
-                sonPom.play();
-                alert("¡Descanso terminado!");
+                sonPom.play().catch(() => {});
+                toast('☕ ¡Descanso terminado!', 'success');
                 reiniciarTemporizador();
                 return;
             }
@@ -1072,13 +1033,18 @@ const viewTitles = {
   reminders: 'Recordatorios', analytics: 'Analytics', log: 'Historial', datos: 'Gestión de datos'
 };
 const viewOrder = ['dashboard','tasks','events','calendar','reminders','analytics','log','datos'];
+let currentView = 'dashboard';
 function showView(v) {
+  currentView = v;
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('view-' + v).classList.add('active');
-  const idx = viewOrder.indexOf(v);
-  if (idx >= 0) document.querySelectorAll('.nav-item')[idx]?.classList.add('active');
+  document.querySelectorAll('[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === v));
+  // "Más" en la barra inferior queda activo para las vistas secundarias
+  const more = document.getElementById('bnMore');
+  if (more) more.classList.toggle('active', !['dashboard', 'tasks', 'events', 'calendar'].includes(v));
+  closeModal('moreSheet');
   document.getElementById('headerTitle').textContent = viewTitles[v] || v;
+  window.scrollTo({ top: 0 });
   if (v === 'analytics') { renderAnalytics(); return; }
   if (v === 'datos') {
     const el = document.getElementById('skipWeekendsToggle');
@@ -1117,6 +1083,8 @@ function startTimer(id, type) {
     stopTimerSilent();
   }
   state.activeTimer = { id, type, start: Date.now(), paused: false, pausedMs: 0 };
+  const it = (type === 'task' ? state.tasks : state.events).find(x => x.id === id);
+  if (it && !it.done) it.status = 'doing';
   save();
   startTicking();
   toast('Temporizador iniciado', 'success');
@@ -1178,12 +1146,31 @@ function stopTimerSilent() {
 
 function startTicking() {
   clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    if (!state.activeTimer || state.activeTimer.paused) return;
-    document.querySelectorAll('[data-timer-live]').forEach(el => { el.textContent = fmtMs(getElapsed(state.activeTimer)); });
-    const tc = document.getElementById('taskCount');
-    if (tc) tc.textContent = state.tasks.filter(t => !t.done && t.due === today()).length;
-  }, 500);
+  const tick = () => {
+    const at = state.activeTimer;
+    if (!at) { stopTicking(); return; }
+    const txt = fmtMs(getElapsed(at));
+    document.querySelectorAll('[data-timer-live]').forEach(el => { el.textContent = txt; });
+    document.querySelectorAll('[data-today-base]').forEach(el => { el.textContent = fmtMs(+el.dataset.todayBase + getElapsed(at)); });
+    const base = currentUser ? currentUser.name + ' - Productividad' : 'Productividad';
+    document.title = at.paused ? base : '⏱ ' + txt + ' · ' + base;
+  };
+  tick();
+  timerInterval = setInterval(tick, 500);
+}
+
+function stopTicking() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  document.title = currentUser ? currentUser.name + ' - Productividad' : 'Productividad';
+}
+
+// Llamado en cada render: si el timer activo llegó desde otro dispositivo
+// (pull o realtime) arrancamos el tick acá también. Antes sólo arrancaba
+// al tocar ▶ en ESTE dispositivo, por eso en el móvil quedaba congelado.
+function ensureTicking() {
+  if (state.activeTimer) { if (!timerInterval) startTicking(); }
+  else if (timerInterval) stopTicking();
 }
 
 function updateItemTime(id, type, ms) {
@@ -1240,17 +1227,6 @@ function deleteTask(id) {
   if (!confirm('¿Eliminar esta tarea?')) return;
   state.tasks = state.tasks.filter(t => t.id !== id);
   if (state.activeTimer?.id === id) stopTimerSilent();
-  save(); renderAll();
-}
-function toggleDone(id, type) {
-  const arr = type === 'task' ? state.tasks : state.events;
-  const item = arr.find(x => x.id === id);
-  if (!item) return;
-  item.done = !item.done;
-  if (item.done && state.activeTimer?.id === id) {
-    stopTimer(id, type);
-    return;
-  }
   save(); renderAll();
 }
 
@@ -1331,10 +1307,15 @@ function deleteReminder(id) {
 // ═══════════════════════════════════════════
 // RENDER
 // ═══════════════════════════════════════════
-function today() { return new Date().toISOString().slice(0, 10); }
+// Fecha LOCAL (antes usaba UTC: desde las 21hs en Argentina "hoy" ya era mañana)
+function localISODate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function dayOf(iso) { return iso ? localISODate(new Date(iso)) : ''; }
+function today() { return localISODate(new Date()); }
 function tomorrow() {
   const d = new Date(); d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
 }
 function fmtDate(d) {
   if (!d) return '';
@@ -1397,13 +1378,13 @@ function renderTaskItem(item, type) {
       ${item.done ? '✓' : ''}
     </div>
     <div class="task-body">
-      <div class="task-name" style="${item.done ? 'text-decoration:line-through;opacity:0.5' : ''}">${item.name}</div>
+      <div class="task-name" style="${item.done ? 'text-decoration:line-through;opacity:0.5' : ''}">${esc(item.name)}</div>
       <div class="task-info">
         ${typeTag}
         <span class="task-due ${dueClass(dueStr, item.done)}">${dueLabel(dueStr, item.done)}</span>
         ${item.totalMs > 0 ? `<span class="task-timer-val">⏱ ${totalFmt}</span>` : ''}
       </div>
-      ${item.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:5px;">${item.notes}</div>` : ''}
+      ${item.notes ? `<div class="task-notes">${esc(item.notes)}</div>` : ''}
       ${timerHtml}
     </div>
     <div class="task-actions">
@@ -1423,11 +1404,9 @@ function renderTasks() {
   else if (status === 'all') { /* mostrar todo */ }
   else {
     // Vista por defecto: pendientes de hoy/futuras + completadas de hoy
-    items = items.filter(t =>
-      (!t.done && t.due >= today()) ||
-      (t.done && t.due === today()) &&
-      (!t.done)
-    );}
+    // Vista por defecto: pendientes (incluidas las vencidas) + completadas hoy
+    items = items.filter(t => !t.done || dayOf(t.completedAt) === today() || (t.done && t.due === today()));
+  }
   // sort: overdue first, then by due date, done last
   items.sort((a, b) => {
     if (a.done !== b.done) return a.done ? 1 : -1;
@@ -1457,74 +1436,516 @@ function renderEvents() {
   document.getElementById('eventCount').textContent = state.events.filter(e => !e.done).length;
 }
 
+// ═══════════════════════════════════════════
+// DASHBOARD + TABLERO KANBAN
+// ═══════════════════════════════════════════
+const KCOLS = [
+  { id: 'todo',    title: 'Por hacer', icon: '○', hint: 'Arrastrá acá lo que viene' },
+  { id: 'doing',   title: 'En curso',  icon: '▶', hint: 'Lo que estás haciendo ahora' },
+  { id: 'waiting', title: 'En espera', icon: '⏸', hint: 'Bloqueado o esperando a alguien' },
+  { id: 'done',    title: 'Hecho',     icon: '✓', hint: 'Soltá acá para completar' },
+];
+const BOARD_PREF_KEY = 'workflow_board_prefs';
+let boardPrefs = { scope: 'today', type: 'all', q: '' };
+try { boardPrefs = { ...boardPrefs, ...JSON.parse(localStorage.getItem(BOARD_PREF_KEY) || '{}'), q: '' }; } catch (e) {}
+
+function saveBoardPrefs() {
+  try { localStorage.setItem(BOARD_PREF_KEY, JSON.stringify({ scope: boardPrefs.scope, type: boardPrefs.type })); } catch (e) {}
+}
+
+function addDaysISO(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return localISODate(d);
+}
+
+function itemStatus(item) {
+  if (item.done) return 'done';
+  const at = state.activeTimer;
+  if (at && at.id === item.id && !at.paused) return 'doing'; // timer corriendo = en curso
+  const s = item.status;
+  return (s === 'doing' || s === 'waiting') ? s : 'todo';
+}
+
+function findItem(id, type) {
+  return (type === 'task' ? state.tasks : state.events).find(x => x.id === id);
+}
+
+function boardEntries() {
+  const t = today();
+  const scope = boardPrefs.scope;
+  const q = (boardPrefs.q || '').trim().toLowerCase();
+  const limit = scope === 'today' ? t : scope === 'week' ? addDaysISO(t, 7) : null;
+  const doneFrom = scope === 'today' ? t : scope === 'week' ? addDaysISO(t, -7) : addDaysISO(t, -30);
+
+  let list = [];
+  if (boardPrefs.type !== 'event') list.push(...state.tasks.map(item => ({ item, type: 'task' })));
+  if (boardPrefs.type !== 'task') list.push(...state.events.map(item => ({ item, type: 'event' })));
+
+  list = list.filter(({ item, type }) => {
+    if (q && !((item.name || '') + ' ' + (item.notes || '')).toLowerCase().includes(q)) return false;
+    const st = itemStatus(item);
+    if (st === 'done') {
+      const d = dayOf(item.completedAt) || (type === 'task' ? item.due : item.date) || '';
+      return d >= doneFrom;
+    }
+    if (st !== 'todo') return true;         // en curso / en espera: siempre visibles
+    if (type === 'event') return true;      // eventualidades pendientes: siempre
+    if (!limit || !item.due) return true;
+    return item.due <= limit;
+  });
+
+  const prioRank = { high: 0, medium: 1, low: 2 };
+  const due = e => (e.type === 'task' ? e.item.due : e.item.date) || '9999';
+  list.sort((a, b) => {
+    const oa = a.item.sortOrder ?? Infinity, ob = b.item.sortOrder ?? Infinity;
+    if (oa !== ob) return oa - ob;
+    if (a.type !== b.type) return a.type === 'event' ? -1 : 1; // urgencias primero
+    if (a.type === 'event') {
+      const p = (prioRank[a.item.prio] ?? 1) - (prioRank[b.item.prio] ?? 1);
+      if (p) return p;
+    }
+    return due(a) < due(b) ? -1 : due(a) > due(b) ? 1 : 0;
+  });
+  return list;
+}
+
+function renderKanbanCard({ item, type }) {
+  const at = state.activeTimer;
+  const isActive = at && at.id === item.id;
+  const isRunning = isActive && !at.paused;
+  const st = itemStatus(item);
+  const dueStr = type === 'task' ? item.due : item.date;
+  const overdue = st !== 'done' && type === 'task' && dueStr && dueStr < today();
+
+  const tag = type === 'task'
+    ? freqTag(item.freq)
+    : `<span class="tag tag-event" style="border-color:${prioColor(item.prio)}55;color:${prioColor(item.prio)};background:${prioColor(item.prio)}14;">⚡ ${item.prio === 'high' ? 'Urgente' : item.prio === 'medium' ? 'Media' : 'Baja'}</span>`;
+
+  const timeHtml = isActive
+    ? `<span class="kcard-time live ${at.paused ? 'paused' : ''}" data-timer-live>${fmtMs(getElapsed(at))}</span>`
+    : (item.totalMs > 0 ? `<span class="kcard-time">⏱ ${fmtMs(item.totalMs)}</span>` : '<span></span>');
+
+  let playBtn = '';
+  if (st !== 'done') {
+    if (isRunning) playBtn = `<button class="kbtn" data-act="pause" title="Pausar">⏸</button>`;
+    else if (isActive) playBtn = `<button class="kbtn kbtn-accent" data-act="resume" title="Continuar">▶</button>`;
+    else playBtn = `<button class="kbtn" data-act="start" title="Iniciar timer">▶</button>`;
+  }
+
+  return `
+  <div class="kcard ${isRunning ? 'running' : isActive ? 'paused' : ''} ${overdue ? 'overdue' : ''} ${st === 'done' ? 'is-done' : ''}"
+       data-id="${item.id}" data-type="${type}">
+    <div class="kcard-top">
+      ${tag}
+      ${dueStr ? `<span class="task-due ${dueClass(dueStr, item.done)}">${type === 'event' ? fmtDate(dueStr) : dueLabel(dueStr, item.done)}</span>` : ''}
+    </div>
+    <div class="kcard-title">${esc(item.name)}</div>
+    ${item.notes ? `<div class="kcard-notes">${esc(item.notes)}</div>` : ''}
+    <div class="kcard-foot">
+      ${timeHtml}
+      <div class="kcard-actions">
+        ${playBtn}
+        <button class="kbtn ${st === 'done' ? 'kbtn-accent' : ''}" data-act="done" title="${st === 'done' ? 'Reabrir' : 'Completar'}">✓</button>
+        <button class="kbtn" data-act="menu" title="Más opciones">⋯</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderKanban() {
+  const el = document.getElementById('kanbanBoard');
+  if (!el) return;
+  const entries = boardEntries();
+  const byCol = Object.fromEntries(KCOLS.map(c => [c.id, []]));
+  entries.forEach(e => byCol[itemStatus(e.item)].push(e));
+
+  el.innerHTML = KCOLS.map(c => `
+    <section class="kcol kcol-${c.id}" data-col="${c.id}">
+      <header class="kcol-head">
+        <span class="kcol-icon">${c.icon}</span>
+        <span class="kcol-title">${c.title}</span>
+        <span class="count-badge">${byCol[c.id].length}</span>
+        ${c.id === 'todo' ? `<button class="kcol-add" onclick="openNewTaskModal()" title="Nueva tarea">+</button>` : ''}
+      </header>
+      <div class="kcol-body" data-col="${c.id}">
+        ${byCol[c.id].map(renderKanbanCard).join('') || `<div class="kcol-empty">${c.hint}</div>`}
+      </div>
+    </section>`).join('');
+
+  // Indicadores de columna (móvil)
+  const dots = document.getElementById('kanbanDots');
+  if (dots) dots.innerHTML = KCOLS.map(c => `<button data-goto="${c.id}">${c.title} <b>${byCol[c.id].length}</b></button>`).join('');
+
+  document.querySelectorAll('#boardScope [data-scope]').forEach(b => b.classList.toggle('active', b.dataset.scope === boardPrefs.scope));
+  document.querySelectorAll('#boardType [data-type]').forEach(b => b.classList.toggle('active', b.dataset.type === boardPrefs.type));
+}
+
+function renderFocusCard() {
+  const el = document.getElementById('activeTasksArea');
+  if (!el) return;
+  const at = state.activeTimer;
+  const item = at ? findItem(at.id, at.type) : null;
+  if (at && item) {
+    const tag = at.type === 'task' ? freqTag(item.freq) : `<span class="tag tag-event">⚡ Eventualidad</span>`;
+    el.innerHTML = `
+      <div class="focus-card ${at.paused ? 'paused' : 'running'}">
+        <div class="focus-info">
+          <div class="focus-label">${at.paused ? '⏸ En pausa' : '● En curso ahora'}</div>
+          <div class="focus-name">${esc(item.name)}</div>
+          <div class="task-info">${tag}${item.totalMs > 0 ? `<span class="task-timer-val">acumulado ${fmtMs(item.totalMs)}</span>` : ''}</div>
+        </div>
+        <div class="focus-timer ${at.paused ? 'paused' : ''}" data-timer-live>${fmtMs(getElapsed(at))}</div>
+        <div class="focus-actions">
+          ${at.paused
+            ? `<button class="btn btn-accent" onclick="resumeTimer()">▶ Continuar</button>`
+            : `<button class="btn" onclick="pauseTimer()">⏸ Pausar</button>`}
+          <button class="btn" onclick="stopTimer('${item.id}','${at.type}')">■ Detener</button>
+          <button class="btn btn-accent-outline" onclick="toggleDone('${item.id}','${at.type}')">✓ Completar</button>
+        </div>
+      </div>`;
+    return;
+  }
+  // Sin timer: sugerimos la próxima
+  const next = boardEntries().find(e => itemStatus(e.item) !== 'done');
+  el.innerHTML = `
+    <div class="focus-card idle">
+      <div class="focus-info">
+        <div class="focus-label">Nada en curso</div>
+        <div class="focus-name">${next ? esc(next.item.name) : '¡Todo al día! 🎉'}</div>
+        ${next ? `<div class="task-info"><span class="focus-hint">Siguiente sugerida</span></div>` : ''}
+      </div>
+      ${next ? `<div class="focus-actions"><button class="btn btn-accent" onclick="startTimer('${next.item.id}','${next.type}')">▶ Empezar</button></div>` : ''}
+    </div>`;
+}
+
 function renderDashboard() {
-  // Stats: solo tareas con vencimiento HOY
-  const todayTasks = state.tasks.filter(t => t.due === today());
-  const todayDone  = todayTasks.filter(t => t.done).length;
+  const t = today();
+  const todayTasks = state.tasks.filter(x => x.due === t || (x.done && dayOf(x.completedAt) === t));
+  const todayDone  = todayTasks.filter(x => x.done).length;
   const totalToday = todayTasks.length;
-  const totalEvents = state.events.filter(e => !e.done).length;
-  const todayMs = state.log.filter(l => l.date.slice(0, 10) === today()).reduce((a, b) => a + b.ms, 0);
+  const overdue = state.tasks.filter(x => !x.done && x.due && x.due < t).length;
+  const openEvents = state.events.filter(e => !e.done);
+  const todayLogs = state.log.filter(l => dayOf(l.date) === t);
+  let todayMs = todayLogs.reduce((a, b) => a + (b.ms || 0), 0);
+  if (state.activeTimer) todayMs += getElapsed(state.activeTimer);
+  const pct = totalToday ? Math.round(todayDone / totalToday * 100) : 0;
+  const rems = state.reminders.filter(r => !r.done && r.date >= t);
+
+  const hello = document.getElementById('dashHello');
+  if (hello) {
+    const h = new Date().getHours();
+    const saludo = h < 12 ? 'Buen día' : h < 20 ? 'Buenas tardes' : 'Buenas noches';
+    hello.textContent = `${saludo}${currentUser ? ', ' + currentUser.name : ''}`;
+  }
+  const sub = document.getElementById('dashSub');
+  if (sub) sub.textContent = new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
 
   document.getElementById('statsGrid').innerHTML = `
     <div class="stat">
-      <div class="stat-val">${todayDone}/${totalToday}</div>
+      <div class="stat-row"><div class="stat-val">${todayDone}<span class="stat-of">/${totalToday}</span></div><div class="stat-pct">${pct}%</div></div>
       <div class="stat-label">Tareas de hoy</div>
-      <div class="progress"><div class="progress-fill" style="width:${totalToday ? Math.round(todayDone/totalToday*100) : 0}%"></div></div>
+      <div class="progress"><div class="progress-fill" style="width:${pct}%"></div></div>
+      ${overdue ? `<div class="stat-sub" style="color:var(--red)">${overdue} vencida${overdue > 1 ? 's' : ''}</div>` : ''}
+    </div>
+    <div class="stat" onclick="showView('events')" style="cursor:pointer">
+      <div class="stat-val">${openEvents.length}</div>
+      <div class="stat-label">Eventualidades abiertas</div>
+      <div class="stat-sub" style="color:var(--red)">${openEvents.filter(e => e.prio === 'high').length} urgentes</div>
     </div>
     <div class="stat">
-      <div class="stat-val">${totalEvents}</div>
-      <div class="stat-label">Eventualidades activas</div>
-      <div class="stat-sub" style="color:var(--red)">${state.events.filter(e => e.prio === 'high' && !e.done).length} urgentes</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">${fmtMs(todayMs)}</div>
+      <div class="stat-val" ${state.activeTimer && !state.activeTimer.paused ? `data-today-base="${todayMs - getElapsed(state.activeTimer)}"` : ''}>${fmtMs(todayMs)}</div>
       <div class="stat-label">Tiempo productivo hoy</div>
-      <div class="stat-sub">${state.log.filter(l => l.date.slice(0,10) === today()).length} sesiones</div>
+      <div class="stat-sub">${todayLogs.length} sesion${todayLogs.length === 1 ? '' : 'es'}</div>
     </div>
-    <div class="stat">
-      <div class="stat-val">${state.reminders.filter(r => !r.done && r.date >= today()).length}</div>
+    <div class="stat" onclick="showView('reminders')" style="cursor:pointer">
+      <div class="stat-val">${rems.length}</div>
       <div class="stat-label">Recordatorios</div>
+      ${rems[0] ? `<div class="stat-sub" style="color:var(--blue)">${esc(rems[0].text.slice(0, 28))}${rems[0].text.length > 28 ? '…' : ''}</div>` : ''}
     </div>`;
 
-  // active
-  const activeEl = document.getElementById('activeTasksArea');
-  if (state.activeTimer) {
-    const arr = state.activeTimer.type === 'task' ? state.tasks : state.events;
-    const item = arr.find(x => x.id === state.activeTimer.id);
-    if (item) {
-      activeEl.innerHTML = renderTaskItem(item, state.activeTimer.type);
-      if (timerInterval) startTicking();
-    }
+  renderFocusCard();
+  renderKanban();
+
+  const remEl = document.getElementById('dashReminders');
+  if (remEl) {
+    remEl.innerHTML = rems.slice(0, 6).map(r => `
+      <div class="rem-chip">
+        <div>
+          <div class="reminder-text">${esc(r.text)}</div>
+          <div class="reminder-time">${fmtDate(r.date)}${r.time ? ' · ' + r.time : ''}</div>
+        </div>
+        <button class="btn btn-sm" onclick="dismissReminder('${r.id}')" title="Listo">✓</button>
+      </div>`).join('') || '<div class="kcol-empty" style="padding:12px">Sin recordatorios activos</div>';
+  }
+}
+
+// ── Acciones sobre tarjetas ─────────────────
+function moveItem(id, type, toCol, beforeId) {
+  const item = findItem(id, type);
+  if (!item) return;
+  const from = itemStatus(item);
+
+  // Reordenar: tomamos el orden visible de la columna destino
+  const colEntries = boardEntries().filter(e => itemStatus(e.item) === toCol && e.item.id !== id);
+  let idx = beforeId ? colEntries.findIndex(e => e.item.id === beforeId) : -1;
+  if (idx < 0) idx = colEntries.length;
+  colEntries.splice(idx, 0, { item, type });
+  colEntries.forEach((e, i) => { e.item.sortOrder = (i + 1) * 10; });
+
+  if (from === toCol) { save(); renderAll(); return; }
+
+  const at = state.activeTimer;
+  const isActive = at && at.id === id;
+
+  if (toCol === 'done') {
+    item.status = 'done';
+    if (!item.done) { toggleDone(id, type); return; }
   } else {
-    activeEl.innerHTML = '<div class="empty"><div class="empty-icon">⏸</div>Ninguna tarea en curso</div>';
+    item.status = toCol;
+    if (item.done) {
+      toggleDone(id, type); // reabrir
+      item.status = toCol;
+    }
+    if (isActive && toCol === 'waiting' && !at.paused) pauseTimer();
+    if (isActive && toCol === 'todo') stopTimer(id, type);
+  }
+  save();
+  renderAll();
+}
+
+function cardAction(act, id, type, anchor) {
+  const item = findItem(id, type);
+  if (!item) return;
+  if (act === 'start') startTimer(id, type);
+  else if (act === 'pause') pauseTimer();
+  else if (act === 'resume') resumeTimer();
+  else if (act === 'done') {
+    if (!item.done) item.status = 'done';
+    else item.status = 'todo';
+    toggleDone(id, type);
+  }
+  else if (act === 'menu') openCardMenu(id, type, anchor);
+}
+
+function openCardMenu(id, type, anchor) {
+  closeCardMenu();
+  const item = findItem(id, type);
+  if (!item) return;
+  const st = itemStatus(item);
+  const menu = document.createElement('div');
+  menu.className = 'card-menu';
+  menu.id = 'cardMenu';
+  menu.innerHTML = `
+    <div class="card-menu-title">${esc(item.name)}</div>
+    <div class="card-menu-sec">Mover a</div>
+    ${KCOLS.filter(c => c.id !== st).map(c => `<button data-move="${c.id}">${c.icon} ${c.title}</button>`).join('')}
+    <div class="card-menu-sep"></div>
+    <button data-del="1" class="danger">✕ Eliminar</button>`;
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = Math.min(r.right - mw, window.innerWidth - mw - 8);
+  let top = r.bottom + 6;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+  menu.style.left = Math.max(8, left) + 'px';
+  menu.style.top = top + 'px';
+  menu.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    closeCardMenu();
+    if (b.dataset.move) moveItem(id, type, b.dataset.move);
+    if (b.dataset.del) type === 'task' ? deleteTask(id) : deleteEvent(id);
+  });
+  setTimeout(() => document.addEventListener('pointerdown', outsideMenu, true), 0);
+}
+function outsideMenu(e) {
+  const m = document.getElementById('cardMenu');
+  if (m && !m.contains(e.target)) closeCardMenu();
+}
+function closeCardMenu() {
+  document.getElementById('cardMenu')?.remove();
+  document.removeEventListener('pointerdown', outsideMenu, true);
+}
+
+// ── Drag & drop (mouse y touch, con Pointer Events) ──
+// Mouse: arrastrar directamente. Touch: mantener apretado ~0,3s y arrastrar
+// (así el scroll normal del tablero sigue funcionando).
+(function initKanbanDnD() {
+  const board = document.getElementById('kanbanBoard');
+  if (!board) return;
+
+  let drag = null; // { card, id, type, startX, startY, pointerId, ghost, offX, offY, active, timer }
+
+  board.addEventListener('click', e => {
+    const btn = e.target.closest('.kbtn');
+    if (!btn) return;
+    const card = btn.closest('.kcard');
+    e.stopPropagation();
+    cardAction(btn.dataset.act, card.dataset.id, card.dataset.type, btn);
+  });
+
+  board.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('button, a, input')) return;
+    const card = e.target.closest('.kcard');
+    if (!card) return;
+    drag = {
+      card, id: card.dataset.id, type: card.dataset.type,
+      startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
+      pointerId: e.pointerId, active: false, touch: e.pointerType !== 'mouse',
+    };
+    if (drag.touch) {
+      drag.timer = setTimeout(() => { if (drag) beginDrag(); }, 280);
+    }
+  });
+
+  window.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    const dist = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+    if (!drag.active) {
+      if (drag.touch) { if (dist > 10) cancelDrag(); } // fue un scroll
+      else if (dist > 5) beginDrag();
+      return;
+    }
+    e.preventDefault();
+    moveGhost();
+    placeHolder();
+    autoScroll();
+  }, { passive: false });
+
+  board.addEventListener('contextmenu', e => { if (e.target.closest('.kcard')) e.preventDefault(); });
+  // En iOS/Android hay que frenar el scroll nativo mientras arrastramos
+  window.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefault(); }, { passive: false });
+
+  window.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.pointerId) endDrag(); });
+  window.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.pointerId) { if (drag.active) endDrag(); else cancelDrag(); } });
+
+  function beginDrag() {
+    const r = drag.card.getBoundingClientRect();
+    drag.active = true;
+    drag.offX = drag.startX - r.left;
+    drag.offY = drag.startY - r.top;
+    const ghost = drag.card.cloneNode(true);
+    ghost.classList.add('kcard-ghost');
+    ghost.style.width = r.width + 'px';
+    document.body.appendChild(ghost);
+    drag.ghost = ghost;
+    drag.card.classList.add('kcard-placeholder');
+    document.body.classList.add('is-dragging');
+    uiBusy = true;
+    closeCardMenu();
+    if (navigator.vibrate && drag.touch) navigator.vibrate(15);
+    moveGhost();
   }
 
-  // urgent: vencidas o que vencen mañana, excluyendo las diarias de mañana
-  // urgent: pendientes de hoy, vencidas, y mañana (excepto diarias)
-  const urgent = state.tasks.filter(t =>
-    !t.done && (
-      t.due <= today() ||
-      t.due === today() ||
-      (t.due === tomorrow() && t.freq !== 'daily')
-    )
-  ).sort((a,b) => (a.due||'') < (b.due||'') ? -1 : 1);
-  const urgEl = document.getElementById('urgentTasksArea');
-  urgEl.innerHTML = urgent.length ? urgent.map(t => renderTaskItem(t, 'task')).join('') :
-    '<div class="empty" style="padding:16px 0"><div style="color:var(--accent)">✓ Sin vencimientos urgentes</div></div>';
+  function moveGhost() {
+    drag.ghost.style.transform = `translate(${drag.x - drag.offX}px, ${drag.y - drag.offY}px) rotate(2deg)`;
+  }
 
-  // reminders
-  const rems = state.reminders.filter(r => !r.done && r.date >= today()).slice(0, 3);
-  const remEl = document.getElementById('dashReminders');
-  remEl.innerHTML = rems.length ? rems.map(r => `
-    <div class="reminder-item">
-      <div>
-        <div class="reminder-text">${r.text}</div>
-        <div class="reminder-time">${fmtDate(r.date)}${r.time ? ' · ' + r.time : ''}</div>
-      </div>
-      <button class="btn btn-sm" onclick="dismissReminder('${r.id}')">✓</button>
-    </div>`).join('') :
-    '<div class="empty" style="padding:12px 0"><div style="color:var(--text3)">Sin recordatorios activos</div></div>';
+  function placeHolder() {
+    const under = document.elementFromPoint(drag.x, drag.y);
+    const body = under && (under.closest('.kcol-body') || under.closest('.kcol')?.querySelector('.kcol-body'));
+    document.querySelectorAll('.kcol.drop-target').forEach(c => c.classList.remove('drop-target'));
+    if (!body) return;
+    body.closest('.kcol').classList.add('drop-target');
+    body.querySelector('.kcol-empty')?.remove();
+    const cards = [...body.querySelectorAll('.kcard:not(.kcard-placeholder)')];
+    const before = cards.find(c => {
+      const r = c.getBoundingClientRect();
+      return drag.y < r.top + r.height / 2;
+    });
+    if (before) { if (before.previousElementSibling !== drag.card) body.insertBefore(drag.card, before); }
+    else if (body.lastElementChild !== drag.card) body.appendChild(drag.card);
+  }
+
+  function autoScroll() {
+    const edge = 50;
+    // horizontal (tablero en móvil)
+    const br = board.getBoundingClientRect();
+    if (drag.x < br.left + edge) board.scrollLeft -= 12;
+    else if (drag.x > br.right - edge) board.scrollLeft += 12;
+    // vertical (página)
+    if (drag.y < edge) window.scrollBy(0, -12);
+    else if (drag.y > window.innerHeight - edge - 70) window.scrollBy(0, 12);
+  }
+
+  function endDrag() {
+    clearTimeout(drag.timer);
+    const d = drag;
+    drag = null;
+    if (!d.active) return;
+    d.ghost.remove();
+    document.body.classList.remove('is-dragging');
+    document.querySelectorAll('.kcol.drop-target').forEach(c => c.classList.remove('drop-target'));
+    const body = d.card.parentElement;
+    const toCol = body && body.dataset.col;
+    const next = d.card.nextElementSibling;
+    const beforeId = next && next.classList.contains('kcard') ? next.dataset.id : null;
+    d.card.classList.remove('kcard-placeholder');
+    uiBusy = false;
+    if (toCol) moveItem(d.id, d.type, toCol, beforeId);
+    else renderAll();
+  }
+
+  function cancelDrag() {
+    clearTimeout(drag.timer);
+    drag = null;
+  }
+
+  // Filtros del tablero
+  document.getElementById('boardScope')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-scope]'); if (!b) return;
+    boardPrefs.scope = b.dataset.scope; saveBoardPrefs(); renderDashboard();
+  });
+  document.getElementById('boardType')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-type]'); if (!b) return;
+    boardPrefs.type = b.dataset.type; saveBoardPrefs(); renderDashboard();
+  });
+  document.getElementById('boardSearch')?.addEventListener('input', e => {
+    boardPrefs.q = e.target.value; renderKanban();
+  });
+  document.getElementById('kanbanDots')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-goto]'); if (!b) return;
+    const col = board.querySelector(`.kcol[data-col="${b.dataset.goto}"]`);
+    if (col) board.scrollTo({ left: col.offsetLeft - board.offsetLeft - 4, behavior: 'smooth' });
+  });
+})();
+
+// Busca y elimina tareas duplicadas (mismo nombre, frecuencia y vencimiento,
+// pendientes) que pudieron quedar de los problemas de sincronización anteriores.
+function cleanDuplicateTasks() {
+  const seen = new Map();
+  const remove = new Set();
+  state.tasks.forEach(t => {
+    if (t.done) return;
+    const key = [t.name, t.freq, t.due].join('|');
+    const prev = seen.get(key);
+    if (!prev) { seen.set(key, t); return; }
+    // conservamos la que tiene más tiempo registrado
+    const keep = (t.totalMs || 0) > (prev.totalMs || 0) ? t : prev;
+    const drop = keep === t ? prev : t;
+    keep.totalMs = Math.max(keep.totalMs || 0, drop.totalMs || 0);
+    remove.add(drop.id);
+    seen.set(key, keep);
+  });
+  if (!remove.size) { toast('No se encontraron tareas duplicadas', 'success'); return; }
+  if (!confirm(`Se encontraron ${remove.size} tarea(s) duplicada(s). ¿Eliminarlas?`)) return;
+  if (state.activeTimer && remove.has(state.activeTimer.id)) stopTimerSilent();
+  state.tasks = state.tasks.filter(t => !remove.has(t.id));
+  save(); renderAll();
+  toast(`✓ ${remove.size} duplicada(s) eliminada(s)`, 'success');
 }
+
+// Barra inferior móvil: menú "Más" y botón flotante
+function openMoreSheet() { document.getElementById('moreSheet').classList.add('open'); }
+function toggleFab(force) {
+  const f = document.getElementById('fab');
+  if (!f) return;
+  f.classList.toggle('open', force ?? !f.classList.contains('open'));
+}
+function fabAction(fn) { toggleFab(false); fn(); }
+
 
 function renderReminders() {
   const el = document.getElementById('reminderList');
@@ -1533,7 +1954,7 @@ function renderReminders() {
   el.innerHTML = rems.length ? rems.map(r => `
     <div class="reminder-item" style="${r.done ? 'opacity:0.4' : ''}">
       <div style="flex:1">
-        <div class="reminder-text" style="${r.done ? 'text-decoration:line-through' : ''}">${r.text}</div>
+        <div class="reminder-text" style="${r.done ? 'text-decoration:line-through' : ''}">${esc(r.text)}</div>
         <div class="reminder-time">${fmtDate(r.date)}${r.time ? ' · ' + r.time : ''}</div>
       </div>
       <div style="display:flex;gap:4px;">
@@ -1550,7 +1971,7 @@ function renderLog() {
   el.innerHTML = state.log.length ? state.log.slice(0, 50).map(l => `
     <div class="log-entry">
       <div class="log-dot" style="background:${l.type === 'task' ? 'var(--accent)' : 'var(--red)'}"></div>
-      <div style="flex:1">${l.name}</div>
+      <div style="flex:1">${esc(l.name)}</div>
       <div style="color:var(--accent)">${fmtMs(l.ms)}</div>
       <div style="color:var(--text3);min-width:80px;text-align:right">${new Date(l.date).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
     </div>`).join('') :
@@ -1563,7 +1984,7 @@ function renderLog() {
   reportEl.innerHTML = allItems.length ? allItems.map(item => `
     <div class="card" style="padding:12px 16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div style="font-size:13px;">${item.name}</div>
+        <div style="font-size:13px;">${esc(item.name)}</div>
         <div style="font-family:var(--font-display);font-size:14px;font-weight:600;color:var(--accent)">${fmtMs(item.totalMs)}</div>
       </div>
     </div>`).join('') : '<div class="empty">Sin tiempo registrado aún.</div>';
@@ -1613,7 +2034,7 @@ function renderCalendar() {
     const dayItems = allItems.filter(x => x._date === ds);
     const dots = dayItems.slice(0, 3).map(x => {
       const col = x._type === 'task' ? 'var(--accent)' : x._type === 'event' ? 'var(--red)' : 'var(--blue)';
-      return `<div class="cal-dot" style="background:${col}18;color:${col};border:1px solid ${col}33;">${(x.name || x.title || x.text || "Sin nombre").slice(0,14)}${(x.name || x.title || x.text || "").length > 14?'…':''}</div>`;
+      return `<div class="cal-dot" style="background:${col}18;color:${col};border:1px solid ${col}33;">${esc((x.name || x.title || x.text || "Sin nombre").slice(0,14))}${(x.name || x.title || x.text || "").length > 14?'…':''}</div>`;
     }).join('');
     html += `<div class="cal-day ${isToday ? 'today' : ''}" onclick="showDayDetail('${ds}')">
       <div class="cal-day-num">${d}</div>${dots}
@@ -1638,7 +2059,7 @@ function showDayDetail(ds) {
   if (!allItems.length) { el.innerHTML = ''; return; }
   el.innerHTML = `<div class="section-head"><div class="section-title">📅 ${fmtDate(ds)}</div></div>` +
     allItems.map(item => {
-      if (item._type === 'reminder') return `<div class="reminder-item"><div><div class="reminder-text">◎ ${item.text}</div></div></div>`;
+      if (item._type === 'reminder') return `<div class="reminder-item"><div><div class="reminder-text">◎ ${esc(item.text)}</div></div></div>`;
       return renderTaskItem(item, item._type);
     }).join('');
 }
@@ -1787,7 +2208,7 @@ function nextDueDate(base, freq) {
   const d = new Date(base + 'T00:00:00');
   d.setDate(d.getDate() + FREQ_DAYS[freq]);
   if (state.config?.skipWeekends !== false) skipWeekend(d);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
 }
 
 function toggleSkipWeekends() {
@@ -1809,7 +2230,7 @@ function fixWeekendTasks() {
     const day = d.getDay();
     if (day === 6 || day === 0) {
       skipWeekend(d);
-      t.due = d.toISOString().slice(0, 10);
+      t.due = localISODate(d);
       count++;
     }
   });
@@ -1912,7 +2333,7 @@ function openDayReport() {
   const ds = document.getElementById('dayViewDate').value;
   if (!ds) { toast('Seleccioná una fecha', 'warn'); return; }
   const area = document.getElementById('dayReportArea');
-  const dayLog = state.log.filter(l => l.date.slice(0, 10) === ds);
+  const dayLog = state.log.filter(l => dayOf(l.date) === ds);
   const dayTasks = state.tasks.filter(t => t.due === ds);
   const dayEvents = state.events.filter(e => e.date === ds);
   const totalMs = dayLog.reduce((a, b) => a + b.ms, 0);
@@ -1941,7 +2362,7 @@ function openDayReport() {
       </tr></thead><tbody>`;
     dayLog.forEach(l => {
       html += `<tr>
-        <td style="padding:8px 10px;border-bottom:1px solid var(--border)">${l.name}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--border)">${esc(l.name)}</td>
         <td style="padding:8px 10px;border-bottom:1px solid var(--border)">${l.type === 'task' ? freqTag(l.freq) : '<span class="tag tag-event" style="font-size:9px">Eventual</span>'}</td>
         <td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-family:var(--font-display)">${fmtMs(l.ms)}</td>
         <td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text3)">${new Date(l.date).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}</td>
@@ -1956,7 +2377,7 @@ function openDayReport() {
       html += `<div style="background:var(--bg3);border-radius:var(--r);padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px;">
         <span style="font-size:16px">${t.done ? '✓' : '○'}</span>
         <div>
-          <div style="font-size:13px">${t.name}</div>
+          <div style="font-size:13px">${esc(t.name)}</div>
           <div style="font-size:11px;color:var(--text3)">${freqLabel(t.freq)} · ${t.done ? 'Completada' : 'Pendiente'} · ⏱ ${fmtMs(t.totalMs || 0)}</div>
         </div>
       </div>`;
@@ -1970,6 +2391,8 @@ function openDayReport() {
 // RENDER ALL
 // ═══════════════════════════════════════════
 function renderAll() {
+  if (uiBusy) return; // se re-renderiza al soltar la tarjeta
+  ensureTicking();
   renderDashboard();
   renderTasks();
   renderEvents();
@@ -1983,62 +2406,40 @@ function renderAll() {
 // ═══════════════════════════════════════════
 load();
 loadThemeFromState();
-if (state.activeTimer && !state.activeTimer.paused) startTicking();
 renderAll();
 renderSyncIndicator();
-// La carga inicial desde Supabase la dispara onAuthReady() una vez que
-// se resuelve la sesión (ver bloque SUPABASE más arriba).
+// La carga desde Supabase la dispara onSignedIn() cuando se resuelve la sesión.
 
 // ───────────────────────────────────────────
 // AUTO-SYNC ENTRE DISPOSITIVOS (respaldo del realtime)
 // ───────────────────────────────────────────
-// Supabase Realtime ya empuja los cambios al instante (ver
-// startRealtime()). Este polling cada 60s es solo una red de
-// seguridad por si algún dispositivo pierde la conexión realtime
-// (por ejemplo, se durmió y se despertó). Reglas:
-//  - No pisa cambios si hay un timer corriendo en ESTE dispositivo
-//    (para no cortar una sesión en curso).
-//  - No sincroniza si hay un modal abierto (para no perder lo que
-//    se está tipeando).
-//  - Se pausa cuando la pestaña no está visible, para no gastar red.
-function safeToAutoPull() {
-  // Si hay un modal abierto, NO pisar lo que el usuario está tipeando
-  const modalOpen = document.querySelector('.modal-overlay.open');
-  if (modalOpen) return false;
-  return true;
+// Realtime ya aplica los cambios al instante. Esto es la red de
+// seguridad para cuando el dispositivo pierde la conexión (móvil en
+// segundo plano, PC que se durmió): al volver a la pestaña, al
+// recuperar la red y cada 60s se hace un pull. El merge por registro
+// hace que un pull nunca pise cambios locales sin subir, así que ya no
+// hace falta bloquearlo con modales abiertos ni timers corriendo.
+function autoPull(minGapMs) {
+  if (!sheetsEnabled() || document.visibilityState !== 'visible') return;
+  if (Date.now() - lastPullAt < (minGapMs || 0)) return;
+  // Si quedó algo sin subir (por ejemplo, el móvil se durmió a mitad), subirlo primero
+  if (computeDiff().count > 0) pushToSheets().then(() => schedulePull(0));
+  else schedulePull(0);
 }
-
-let autoSyncInterval = null;
-function startAutoSync() {
-  if (autoSyncInterval) clearInterval(autoSyncInterval);
-  autoSyncInterval = setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    if (!sheetsEnabled()) return;
-    if (pushInFlight) return;        // ← nuevo: no pisa un push en curso
-    if (!safeToAutoPull()) return;
-    loadFromSheets({ silent: true });
-  }, 60000);
-}
-startAutoSync();
-
+setInterval(() => autoPull(55000), 60000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  if (!sheetsEnabled() || pushInFlight) return;
-  if (!safeToAutoPull()) return;
-  loadFromSheets({ silent: true });
+  if (document.visibilityState === 'visible') { ensureTicking(); renderAll(); autoPull(3000); }
+  else if (sheetsEnabled() && computeDiff().count > 0) pushToSheets(); // antes de que el SO congele la pestaña
 });
+window.addEventListener('online', () => autoPull(0));
+window.addEventListener('focus', () => autoPull(15000));
+window.addEventListener('pagehide', () => { if (sheetsEnabled() && computeDiff().count > 0) pushToSheets(); });
 
-startAutoSync();
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && sheetsEnabled() && safeToAutoPull()) {
-    loadFromSheets({ silent: true });
-  }
-});
 
 // ATAJOS
 function guardarTarea() {
   const gTarea = document.querySelector(".modal-overlay.open");
+  if (!gTarea) return;
   switch (gTarea.id) {
     case 'authGate':
       handleAuthSubmit();
@@ -2138,7 +2539,7 @@ function getFilteredLogs() {
   const to   = document.getElementById('analyticsTo').value;
 
   return state.log.filter(l => {
-    const d = l.date.slice(0, 10);
+    const d = dayOf(l.date);
 
     if (from && d < from) return false;
     if (to && d > to) return false;
@@ -2178,7 +2579,7 @@ function buildAnalyticsData() {
   // By day (chronological)
   const byDay = {};
   logs.forEach(l => {
-    const d = l.date.slice(0, 10);
+    const d = dayOf(l.date);
     if (!byDay[d]) byDay[d] = 0;
     byDay[d] += (l.ms || 0);
   });

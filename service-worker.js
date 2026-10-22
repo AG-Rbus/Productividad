@@ -1,7 +1,7 @@
 // Service Worker — Gestor de Tareas
 // Sube este número de versión cada vez que cambies el HTML/CSS/JS
 // para forzar a los dispositivos a bajar la versión nueva.
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME = 'productividad-cache-' + CACHE_VERSION;
 
 // Archivos propios de la app: se guardan en caché apenas se instala
@@ -61,9 +61,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Estrategia "stale-while-revalidate": responde rápido con lo que
-  // haya en caché (o de la red si no hay nada todavía) y en paralelo
-  // actualiza la caché para la próxima vez.
+  // Archivos propios (HTML/JS/CSS): primero la red, así cada dispositivo
+  // recibe la versión nueva apenas se publica; si no hay red, la caché.
+  const sameOrigin = url.origin === self.location.origin;
+  if (sameOrigin && (req.mode === 'navigate' || /\.(js|css|html|json)$/.test(url.pathname))) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((c) => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // Resto (íconos, fuentes, CDN): caché primero y se actualiza en segundo plano
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)

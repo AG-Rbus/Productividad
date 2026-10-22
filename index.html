@@ -18,7 +18,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -57,36 +57,35 @@
 
 <!-- SIDEBAR -->
 <nav class="sidebar">
-  <div id="dropOrig"><i class="fa fa-angle-double-down oculto" id="DropBtn" style="font-size:24px"  onclick="hideSide()"></i></div>
   <div class="sidebar-main">
       <div class="logo-text">Gestor de Tareas</div>
       <div class="logo-sub">STEFANI</div>
-    </div>
+  </div>
     <div class="nav">
       <div class="nav-section">Vistas</div>
-      <div class="nav-item active" onclick="showView('dashboard')">
+      <div class="nav-item active" data-view="dashboard" onclick="showView('dashboard')">
         <i class="icon">◈</i><span>Dashboard<span class="ATAJOS"> (alt+1)</span></span>
       </div>
-      <div class="nav-item" onclick="showView('tasks')">
+      <div class="nav-item" data-view="tasks" onclick="showView('tasks')">
         <i class="icon">≡</i><span>Tareas<span class="ATAJOS"> (alt+2)</span></span>
       </div>
-      <div class="nav-item" onclick="showView('events')">
+      <div class="nav-item" data-view="events" onclick="showView('events')">
         <i class="icon">⚡</i><span>Eventualidades<span class="ATAJOS"> (alt+3)</span></span>
       </div>
-      <div class="nav-item" onclick="showView('calendar')">
+      <div class="nav-item" data-view="calendar" onclick="showView('calendar')">
         <i class="icon">◫</i><span>Calendario<span class="ATAJOS"> (alt+4)</span></span>
       </div>
       <div class="nav-section">Extras</div>
-      <div class="nav-item" onclick="showView('reminders')">
+      <div class="nav-item" data-view="reminders" onclick="showView('reminders')">
         <i class="icon">◎</i><span>Recordatorios<span class="ATAJOS"> (alt+5)</span></span>
       </div>
-      <div class="nav-item" onclick="showView('analytics')">
+      <div class="nav-item" data-view="analytics" onclick="showView('analytics')">
         <i class="icon">📊</i><span>Analytics<span class="ATAJOS"> (alt+6)</span></span>
       </div>
-      <div class="nav-item" onclick="showView('log')">
+      <div class="nav-item" data-view="log" onclick="showView('log')">
         <i class="icon">▤</i><span>Historial</span>
       </div>
-      <div class="nav-item" onclick="showView('datos')">
+      <div class="nav-item" data-view="datos" onclick="showView('datos')">
         <i class="icon">↓</i><span>Datos</span>
       </div>
     </div>
@@ -112,16 +111,14 @@
       <div class="clock" id="clock">00:00</div>
       <div class="date" id="dateLabel"></div>
     </div>
-  </div>
-  
 </nav>
 
 <!-- MAIN -->
 <div class="main">
   <div id="head">
-    <div id="header-drop"></div>
     <div class="header">
       <div class="header-title" id="headerTitle">Dashboard</div>
+      <span id="syncIndicatorMobile" class="sync-mobile" onclick="manualSync()" title="Sincronizar"></span>
       <div class="header-actions">
         <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
         <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
@@ -144,29 +141,39 @@
   </div>
 
   <div class="view active" id="view-dashboard">
+    <div class="dash-top">
+      <div>
+        <div class="dash-hello" id="dashHello">Hola</div>
+        <div class="dash-sub" id="dashSub"></div>
+      </div>
+    </div>
+
     <div class="stats-grid" id="statsGrid"></div>
 
-    <div class="section-head">
-      <div class="section-title">▶ En curso ahora</div>
-    </div>
-    <div id="activeTasksArea">
-      <div class="empty"><div class="empty-icon">⏸</div>Ninguna tarea en curso</div>
-    </div>
-    <div id="pomodoroMovil">
+    <div id="activeTasksArea"></div>
+    <div id="pomodoroMovil" class="pomodoro-dash"></div>
 
+    <div class="board-toolbar">
+      <div class="section-title">▦ Tablero</div>
+      <div class="board-filters">
+        <div class="seg" id="boardScope" role="tablist" aria-label="Período">
+          <button data-scope="today">Hoy</button><button data-scope="week">Semana</button><button data-scope="all">Todo</button>
+        </div>
+        <div class="seg" id="boardType" role="tablist" aria-label="Tipo">
+          <button data-type="all">Todo</button><button data-type="task">Tareas</button><button data-type="event">Eventos</button>
+        </div>
+        <input type="search" id="boardSearch" class="board-search" placeholder="Buscar…" autocomplete="off">
+      </div>
     </div>
-    
-
-    <div class="section-head" style="margin-top:28px;">
-      <div class="section-title">📅 Vencen hoy o mañana</div>
-    </div>
-    <div id="urgentTasksArea"></div>
+    <div class="kanban-dots" id="kanbanDots"></div>
+    <div class="kanban" id="kanbanBoard"></div>
+    <div class="board-hint">Arrastrá las tarjetas entre columnas · en el celular mantené apretado para arrastrar, o usá ⋯</div>
 
     <div class="section-head" style="margin-top:28px;">
       <div class="section-title">◎ Recordatorios activos</div>
       <button class="btn btn-sm" onclick="showView('reminders')">Ver todos</button>
     </div>
-    <div id="dashReminders"></div>
+    <div id="dashReminders" class="rem-strip"></div>
   </div>
 
   <!-- TASKS -->
@@ -182,7 +189,7 @@
           <option value="monthly">Mensuales</option>
         </select>
         <select id="filterStatus" onchange="renderTasks()" style="width:auto;padding:6px 10px;font-size:11px;">
-          <option value="">Hoy y futuras</option>
+          <option value="">Pendientes y de hoy</option>
           <option value="pending">Pendientes</option>
           <option value="done">Completadas</option>
           <option value="all">Todas</option>
@@ -338,10 +345,11 @@
         Si la próxima fecha calculada cae en fin de semana, se corre automáticamente al lunes siguiente. Aplica a las próximas fechas que se generen a partir de ahora.
       </div>
       <button class="btn btn-sm" onclick="fixWeekendTasks()">🔧 Correr al lunes las tareas pendientes que ya caen en sábado/domingo</button>
+      <button class="btn btn-sm" style="margin-top:8px" onclick="cleanDuplicateTasks()">🧹 Buscar y eliminar tareas duplicadas</button>
     </div>
 
 
-    <div class="container-datos" id="pomodoroContainer">
+    <div class="container-datos" id="pomodoroConfig">
       <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">⌚ Pomodoro</div>
       <label>
         <input type="text" placeholder="Pomodoro Corto (minutos)" id="tiem-corto">
@@ -505,6 +513,39 @@
 </div>
 
  
+
+<!-- NAVEGACIÓN MÓVIL -->
+<nav class="bottom-nav" aria-label="Navegación">
+  <button data-view="dashboard" class="active" onclick="showView('dashboard')"><span>◈</span>Inicio</button>
+  <button data-view="tasks" onclick="showView('tasks')"><span>≡</span>Tareas</button>
+  <button data-view="events" onclick="showView('events')"><span>⚡</span>Eventos</button>
+  <button data-view="calendar" onclick="showView('calendar')"><span>◫</span>Agenda</button>
+  <button id="bnMore" onclick="openMoreSheet()"><span>⋯</span>Más</button>
+</nav>
+
+<div class="fab" id="fab">
+  <div class="fab-menu">
+    <button onclick="fabAction(openNewTaskModal)">≡ Nueva tarea</button>
+    <button onclick="fabAction(openNewEventModal)">⚡ Eventualidad</button>
+    <button onclick="fabAction(openReminderModal)">◎ Recordatorio</button>
+  </div>
+  <button class="fab-btn" onclick="toggleFab()" aria-label="Agregar">+</button>
+</div>
+
+<div class="modal-overlay sheet" id="moreSheet">
+  <div class="modal">
+    <div class="sheet-grip"></div>
+    <div class="more-grid">
+      <button data-view="reminders" onclick="showView('reminders')"><span>◎</span>Recordatorios</button>
+      <button data-view="analytics" onclick="showView('analytics')"><span>📊</span>Analytics</button>
+      <button data-view="log" onclick="showView('log')"><span>▤</span>Historial</button>
+      <button data-view="datos" onclick="showView('datos')"><span>↓</span>Datos</button>
+      <button onclick="closeModal('moreSheet');document.getElementById('themeToggle').click()"><span>🌓</span>Tema</button>
+      <button onclick="closeModal('moreSheet');manualSync()"><span>⟲</span>Sincronizar</button>
+    </div>
+    <div class="more-sync" id="syncIndicatorDatos2"></div>
+  </div>
+</div>
 
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer"></div>
