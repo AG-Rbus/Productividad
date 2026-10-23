@@ -69,6 +69,9 @@
       <div class="nav-item" data-view="tasks" onclick="showView('tasks')">
         <i class="icon">≡</i><span>Tareas<span class="ATAJOS"> (alt+2)</span></span>
       </div>
+      <div class="nav-item" data-view="projects" onclick="currentProjectId=null;showView('projects')">
+        <i class="icon">📁</i><span>Proyectos</span>
+      </div>
       <div class="nav-item" data-view="events" onclick="showView('events')">
         <i class="icon">⚡</i><span>Eventualidades<span class="ATAJOS"> (alt+3)</span></span>
       </div>
@@ -123,6 +126,7 @@
         <span id="syncIndicator" style="font-size:11px;margin-right:4px;"></span>
         <span id="headerUserEmail" style="font-size:11px;color:var(--text3);margin-right:4px;"></span>
         <button class="btn btn-sm" onclick="manualSync()" title="Forzar sincronización con BD">⟲ Sincronizar</button>
+        <button class="btn" onclick="openNewProjectModal()">📁 Proyecto</button>
         <button class="btn btn-accent" onclick="openNewTaskModal()">+ Nueva tarea</button>
         <button class="btn" onclick="openNewEventModal()">⚡ Eventualidad<span class="ATAJOS">F2</span></button>
         <button class="btn" id="themeToggle">🌓 Tema</button>
@@ -162,6 +166,9 @@
         <div class="seg" id="boardType" role="tablist" aria-label="Tipo">
           <button data-type="all">Todo</button><button data-type="task">Tareas</button><button data-type="event">Eventos</button>
         </div>
+        <select id="boardProject" class="board-project">
+          <option value="">Todos los proyectos</option>
+        </select>
         <input type="search" id="boardSearch" class="board-search" placeholder="Buscar…" autocomplete="off">
       </div>
     </div>
@@ -176,6 +183,21 @@
     <div id="dashReminders" class="rem-strip"></div>
   </div>
 
+  <!-- PROJECTS -->
+  <div class="view" id="view-projects">
+    <div class="section-head" id="projectListHead">
+      <div class="section-title">Proyectos <span class="count-badge" id="projectCount">0</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;text-transform:none;letter-spacing:0;font-size:11px;cursor:pointer;">
+          <input type="checkbox" id="projectShowArchived" onchange="renderProjects()" style="width:auto;accent-color:var(--accent);"> Ver archivados
+        </label>
+        <button class="btn btn-accent btn-sm" onclick="openNewProjectModal()">+ Nuevo proyecto</button>
+      </div>
+    </div>
+    <div class="project-grid" id="projectGrid"></div>
+    <div id="projectDetail" style="display:none"></div>
+  </div>
+
   <!-- TASKS -->
   <div class="view" id="view-tasks">
     <div class="section-head">
@@ -188,6 +210,9 @@
           <option value="weekly">Semanales</option>
           <option value="biweekly">Quincenales</option>
           <option value="monthly">Mensuales</option>
+        </select>
+        <select id="filterProject" onchange="renderTasks()" style="width:auto;padding:6px 10px;font-size:11px;">
+          <option value="">Todos los proyectos</option>
         </select>
         <select id="filterStatus" onchange="renderTasks()" style="width:auto;padding:6px 10px;font-size:11px;">
           <option value="">Pendientes y de hoy</option>
@@ -410,6 +435,46 @@
 
  
 <!-- MODALS -->
+<!-- Project Modal (nuevo / editar) -->
+<div class="modal-overlay" id="newProjectModal">
+  <div class="modal">
+    <div class="modal-title" id="np-title">Nuevo proyecto</div>
+    <input type="hidden" id="np-id">
+    <div class="form-row">
+      <div>
+        <label>Nombre del proyecto</label>
+        <input type="text" id="np-name" placeholder="Ej: Migración del sistema de facturación">
+      </div>
+    </div>
+    <div class="form-row cols2">
+      <div>
+        <label>Fecha objetivo (opcional)</label>
+        <input type="date" id="np-due">
+      </div>
+      <div>
+        <label>Color</label>
+        <div class="color-pick" id="np-colors">
+          <button type="button" data-color="green"  style="--c:var(--accent)" onclick="pickProjectColor(this)" title="Verde"></button>
+          <button type="button" data-color="blue"   style="--c:var(--blue)"   onclick="pickProjectColor(this)" title="Azul"></button>
+          <button type="button" data-color="purple" style="--c:var(--purple)" onclick="pickProjectColor(this)" title="Violeta"></button>
+          <button type="button" data-color="amber"  style="--c:var(--amber)"  onclick="pickProjectColor(this)" title="Ámbar"></button>
+          <button type="button" data-color="red"    style="--c:var(--red)"    onclick="pickProjectColor(this)" title="Rojo"></button>
+          <button type="button" data-color="gray"   style="--c:var(--text2)"  onclick="pickProjectColor(this)" title="Gris"></button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Descripción (opcional)</label>
+        <textarea id="np-notes" placeholder="Objetivo, alcance, links..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('newProjectModal')">Cancelar</button>
+      <button class="btn btn-accent" onclick="saveProject()">Guardar proyecto</button>
+    </div>
+  </div>
+</div>
 
 <!-- New Task Modal -->
 <div class="modal-overlay" id="newTaskModal">
@@ -419,6 +484,12 @@
       <div>
         <label>Nombre de la tarea</label>
         <input type="text" id="nt-name" placeholder="Ej: Revisar reportes de ventas">
+      </div>
+      <div>
+        <label>Proyecto (opcional)</label>
+        <select id="nt-project">
+          <option value="">Sin proyecto</option>
+        </select>
       </div>
     </div>
     <div class="form-row cols2">
@@ -458,6 +529,12 @@
       <div>
         <label>Descripción</label>
         <input type="text" id="ne-name" placeholder="Ej: Bug crítico en producción">
+      </div>
+      <div>
+        <label>Proyecto (opcional)</label>
+        <select id="ne-project">
+          <option value="">Sin proyecto</option>
+        </select>
       </div>
     </div>
     <div class="form-row cols2">
@@ -527,6 +604,7 @@
 
 <div class="fab" id="fab">
   <div class="fab-menu">
+    <button onclick="fabAction(openNewProjectModal)">📁 Nuevo proyecto</button>
     <button onclick="fabAction(openNewTaskModal)">≡ Nueva tarea</button>
     <button onclick="fabAction(openNewEventModal)">⚡ Eventualidad</button>
     <button onclick="fabAction(openReminderModal)">◎ Recordatorio</button>
@@ -538,6 +616,7 @@
   <div class="modal">
     <div class="sheet-grip"></div>
     <div class="more-grid">
+      <button data-view="projects" onclick="currentProjectId=null;showView('projects')"><span>📁</span>Proyectos</button>
       <button data-view="reminders" onclick="showView('reminders')"><span>◎</span>Recordatorios</button>
       <button data-view="analytics" onclick="showView('analytics')"><span>📊</span>Analytics</button>
       <button data-view="log" onclick="showView('log')"><span>▤</span>Historial</button>

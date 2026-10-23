@@ -607,3 +607,47 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 }
 
 @keyframes sheetUp { from { transform: translateY(30px); opacity: .4; } to { transform: none; opacity: 1; } }
+
+/* ═══════════════════════════════════════════
+   PROYECTOS
+   ═══════════════════════════════════════════ */
+.tag-project { cursor: pointer; text-transform: none; letter-spacing: 0; border: 1px solid; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+.kcard-project { margin-top: 6px; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.project-card {
+  background: var(--bg2); border: 1px solid var(--border); border-top: 3px solid var(--pc); border-radius: 12px;
+  padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .15s; display: flex; flex-direction: column; gap: 8px;
+}
+.project-card:hover { border-color: var(--border2); border-top-color: var(--pc); transform: translateY(-1px); }
+.project-card.archived { opacity: .55; }
+.project-card-head { display: flex; align-items: center; gap: 8px; }
+.project-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pc); flex-shrink: 0; }
+.project-name { font-family: var(--font-display); font-size: 14px; font-weight: 600; flex: 1; overflow-wrap: anywhere; }
+.project-notes { font-size: 11px; color: var(--text3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-line; }
+.project-progress { height: 5px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+.project-progress > div { height: 100%; background: var(--pc); border-radius: 3px; transition: width .3s; }
+.project-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text2); }
+.project-hero {
+  display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap;
+  background: var(--bg2); border: 1px solid var(--border); border-left: 4px solid var(--pc); border-radius: 12px;
+  padding: 16px 18px; margin: 12px 0 8px;
+}
+.project-hero-main { flex: 1; min-width: 220px; }
+.project-hero-name { font-family: var(--font-display); font-size: 19px; font-weight: 700; overflow-wrap: anywhere; }
+.project-hero-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.color-pick { display: flex; gap: 8px; align-items: center; min-height: 36px; }
+.color-pick button { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; box-shadow: 0 0 0 1px var(--border2); }
+.color-pick button.active { border-color: var(--bg); box-shadow: 0 0 0 2px var(--c); }
+.card-menu-select { margin: 2px 0 4px; padding: 7px 8px; font-size: 12px; }
+.board-project { width: auto; max-width: 190px; padding: 6px 10px; font-size: 11px; }
+
+@media (max-width: 760px) {
+  .project-grid { grid-template-columns: 1fr; }
+  .project-hero-actions { width: 100%; }
+  .project-hero-actions .btn { flex: 1; justify-content: center; }
+  .board-project { max-width: none; width: 100%; padding: 10px 12px; font-size: 14px; }
+}
+
+/* Header: que los botones no se partan en dos líneas */
+.header-actions { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.header-actions .btn, #syncIndicator, #headerUserEmail { white-space: nowrap; }

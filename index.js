@@ -36,6 +36,7 @@ btn.addEventListener("click", () => {
 // STATE
 // ═══════════════════════════════════════════
 let state = {
+  projects: [],
   tasks: [],
   events: [],
   reminders: [],
@@ -240,7 +241,7 @@ function onSignedOut() {
   stopRealtime();
 
   // Limpiar TODO el estado visible para que no quede nada de la cuenta anterior
-  state = { tasks: [], events: [], reminders: [], log: [], activeTimer: null };
+  state = { projects: [], tasks: [], events: [], reminders: [], log: [], activeTimer: null };
   applyDefaults();
   synced = emptySnapshot(null);
   initialPullDone = false;
@@ -301,7 +302,14 @@ if (supabaseClient) {
 //    locales sin subir, gana el local; si no, gana el servidor.
 //  · Realtime aplica cada fila que llega con la misma regla, sin hacer
 //    un pull completo.
-const COLLECTIONS = ['tasks', 'events', 'reminders', 'log'];
+const COLLECTIONS = ['projects', 'tasks', 'events', 'reminders', 'log'];
+// Tablas que todavía no existen en Supabase (ej. no se corrió la
+// migración de proyectos): se guardan sólo localmente hasta que existan.
+const missingTables = new Set();
+function isMissingTableError(err) {
+  const m = (err && (err.message || '')) + ' ' + (err && err.code || '');
+  return /PGRST205|42P01|Could not find the table|does not exist/i.test(m);
+}
 const SNAPSHOT_KEY = 'workflow_v2_synced';
 const SKIPCOLS_KEY = 'workflow_v2_skipcols';
 const LOG_MAX = 3000;
@@ -324,7 +332,7 @@ let skippedColumns = {};
 try { skippedColumns = JSON.parse(localStorage.getItem(SKIPCOLS_KEY) || '{}'); } catch (e) {}
 
 function emptySnapshot(uid) {
-  return { uid, migrated: false, tasks: {}, events: {}, reminders: {}, log: {}, config: null, timer: null };
+  return { uid, migrated: false, projects: {}, tasks: {}, events: {}, reminders: {}, log: {}, config: null, timer: null };
 }
 
 // Serialización estable: claves ordenadas, sin null/undefined ni claves
@@ -363,6 +371,7 @@ function computeDiff() {
   const d = { upserts: {}, deletes: {}, config: null, timer: null, count: 0 };
   if (!synced.migrated) return d; // hasta el primer pull no sabemos qué hay en el servidor
   for (const c of COLLECTIONS) {
+    if (missingTables.has(c)) continue;
     const snap = synced[c] || {};
     const seen = new Set();
     const ups = [];
@@ -384,6 +393,7 @@ function computeDiff() {
 }
 
 function applyDefaults() {
+  if (!state.projects) state.projects = [];
   if (!state.tasks) state.tasks = [];
   if (!state.events) state.events = [];
   if (!state.reminders) state.reminders = [];
@@ -488,6 +498,7 @@ async function pushToSheets(opts) {
 
   try {
     for (const c of COLLECTIONS) {
+      if (!synced[c]) synced[c] = {};
       for (const part of chunk(d.upserts[c] || [], 400)) {
         await upsertRows(c, part.map(u => u.rec), 'user_id,id');
         part.forEach(u => { synced[c][u.rec.id] = u.s; });
@@ -547,8 +558,23 @@ async function fetchAllRows(table, uid, pageSize = 1000) {
   return all;
 }
 
+// Igual que fetchAllRows, pero si la tabla no existe devuelve null en vez de fallar
+async function fetchOptionalTable(table, uid) {
+  try {
+    const rows = await fetchAllRows(table, uid);
+    missingTables.delete(table);
+    return rows;
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    if (!missingTables.has(table)) console.warn(`[Sync] La tabla "${table}" no existe en Supabase. Corré supabase/migracion_proyectos.sql. Mientras tanto se guarda sólo en este dispositivo.`);
+    missingTables.add(table);
+    return null;
+  }
+}
+
 async function fetchTablesFromSupabase(uid) {
-  const [tasks, events, reminders, log, cfgR, timerR] = await Promise.all([
+  const [projects, tasks, events, reminders, log, cfgR, timerR] = await Promise.all([
+    fetchOptionalTable('projects', uid),
     fetchAllRows('tasks', uid),
     fetchAllRows('events', uid),
     fetchAllRows('reminders', uid),
@@ -558,7 +584,7 @@ async function fetchTablesFromSupabase(uid) {
   ]);
   if (cfgR.error) throw cfgR.error;
   if (timerR.error) throw timerR.error;
-  return { tasks, events, reminders, log, config: cfgR.data ? cfgR.data.config : undefined, timer: timerR.data ? timerR.data.timer : undefined };
+  return { projects, tasks, events, reminders, log, config: cfgR.data ? cfgR.data.config : undefined, timer: timerR.data ? timerR.data.timer : undefined };
 }
 
 function stripRow(row) {
@@ -646,6 +672,7 @@ async function loadFromSheets(opts) {
       if (!synced.migrated) mode = remoteEmpty ? 'keepLocal' : 'remoteWins';
 
       for (const c of COLLECTIONS) {
+        if (remote[c] === null) continue; // tabla inexistente: queda lo local
         const { out, newSnap } = mergeCollection(c, remote[c], mode);
         state[c] = out;
         synced[c] = newSnap;
@@ -769,6 +796,12 @@ function startRealtime() {
   ['tasks', 'events', 'reminders', 'log', 'user_config', 'active_timer'].forEach(table => {
     ch.on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${uid}` }, applyRealtimeRow);
   });
+  // Proyectos en un canal aparte: si la tabla todavía no existe, que no
+  // rompa la suscripción del resto.
+  const chProjects = supabaseClient.channel('rt-projects-' + uid)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'projects', filter: `user_id=eq.${uid}` }, applyRealtimeRow)
+    .subscribe();
+  realtimeChannels.push(chProjects);
   ch.subscribe((status, err) => {
     if (err) console.error('[RT] error:', err);
     // Al (re)conectar hacemos un pull para recuperar lo que se perdió
@@ -1030,7 +1063,7 @@ tickClock();
 const viewTitles = {
   dashboard: 'Dashboard', tasks: 'Tareas estándar',
   events: 'Eventualidades', calendar: 'Calendario',
-  reminders: 'Recordatorios', analytics: 'Analytics', log: 'Historial', datos: 'Gestión de datos'
+  reminders: 'Recordatorios', analytics: 'Analytics', projects: 'Proyectos', log: 'Historial', datos: 'Gestión de datos'
 };
 const viewOrder = ['dashboard','tasks','events','calendar','reminders','analytics','log','datos'];
 let currentView = 'dashboard';
@@ -1199,7 +1232,232 @@ function logSession(id, type, ms) {
 // ═══════════════════════════════════════════
 // TASKS
 // ═══════════════════════════════════════════
-function openNewTaskModal() {
+// ═══════════════════════════════════════════
+// PROYECTOS
+// ═══════════════════════════════════════════
+const PROJECT_COLORS = {
+  green: 'var(--accent)', blue: 'var(--blue)', purple: 'var(--purple)',
+  amber: 'var(--amber)', red: 'var(--red)', gray: 'var(--text2)',
+};
+let currentProjectId = null; // proyecto abierto en la vista de detalle
+
+function projectById(id) { return id ? state.projects.find(p => p.id === id) : null; }
+function projectColor(p) { return PROJECT_COLORS[p?.color] || PROJECT_COLORS.green; }
+function activeProjects() {
+  return state.projects.filter(p => p.status !== 'archived')
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+function projectChip(projectId) {
+  const p = projectById(projectId);
+  if (!p) return '';
+  const col = projectColor(p);
+  return `<span class="tag tag-project" style="color:${col};border-color:color-mix(in srgb, ${col} 35%, transparent);background:color-mix(in srgb, ${col} 10%, transparent)" onclick="event.stopPropagation();openProject('${p.id}')" title="Abrir proyecto">📁 ${esc(p.name)}</span>`;
+}
+
+// Completa los <select> de proyecto (modales y filtros) sin perder lo elegido
+function fillProjectSelects() {
+  const opts = activeProjects().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const sets = [
+    ['nt-project', '<option value="">Sin proyecto</option>'],
+    ['ne-project', '<option value="">Sin proyecto</option>'],
+    ['filterProject', '<option value="">Todos los proyectos</option><option value="__none">Sin proyecto</option>'],
+    ['boardProject', '<option value="">Todos los proyectos</option><option value="__none">Sin proyecto</option>'],
+  ];
+  for (const [id, head] of sets) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const prev = el.value;
+    el.innerHTML = head + opts;
+    if ([...el.options].some(o => o.value === prev)) el.value = prev;
+  }
+}
+
+function matchesProjectFilter(item, filter) {
+  if (!filter) return true;
+  if (filter === '__none') return !projectById(item.projectId);
+  return item.projectId === filter;
+}
+
+function openNewProjectModal(id) {
+  const p = typeof id === 'string' ? projectById(id) : null;
+  document.getElementById('np-id').value = p ? p.id : '';
+  document.getElementById('np-title').textContent = p ? 'Editar proyecto' : 'Nuevo proyecto';
+  document.getElementById('np-name').value = p ? p.name : '';
+  document.getElementById('np-notes').value = p ? (p.notes || '') : '';
+  document.getElementById('np-due').value = p ? (p.due || '') : '';
+  const color = p?.color || 'green';
+  document.querySelectorAll('#np-colors [data-color]').forEach(b => b.classList.toggle('active', b.dataset.color === color));
+  document.getElementById('newProjectModal').classList.add('open');
+  document.getElementById('np-name').focus();
+}
+
+function pickProjectColor(btn) {
+  document.querySelectorAll('#np-colors [data-color]').forEach(b => b.classList.toggle('active', b === btn));
+}
+
+function saveProject() {
+  const name = document.getElementById('np-name').value.trim();
+  if (!name) { toast('Ingresá un nombre', 'warn'); return; }
+  const id = document.getElementById('np-id').value;
+  const data = {
+    name,
+    notes: document.getElementById('np-notes').value.trim(),
+    due: document.getElementById('np-due').value || null,
+    color: document.querySelector('#np-colors [data-color].active')?.dataset.color || 'green',
+  };
+  if (id) {
+    Object.assign(projectById(id), data);
+    toast('Proyecto actualizado ✓', 'success');
+  } else {
+    state.projects.push({ id: uid(), ...data, status: 'active', createdAt: new Date().toISOString() });
+    toast('Proyecto creado ✓', 'success');
+  }
+  save();
+  closeModal('newProjectModal');
+  renderAll();
+}
+
+function toggleArchiveProject(id) {
+  const p = projectById(id);
+  if (!p) return;
+  p.status = p.status === 'archived' ? 'active' : 'archived';
+  save(); renderAll();
+  toast(p.status === 'archived' ? 'Proyecto archivado' : 'Proyecto reactivado', 'success');
+}
+
+function deleteProject(id) {
+  const p = projectById(id);
+  if (!p) return;
+  const n = state.tasks.filter(t => t.projectId === id).length + state.events.filter(e => e.projectId === id).length;
+  const msg = n
+    ? `¿Eliminar el proyecto "${p.name}"? Sus ${n} tarea(s) no se borran: quedan "sin proyecto".`
+    : `¿Eliminar el proyecto "${p.name}"?`;
+  if (!confirm(msg)) return;
+  state.tasks.forEach(t => { if (t.projectId === id) t.projectId = null; });
+  state.events.forEach(e => { if (e.projectId === id) e.projectId = null; });
+  state.projects = state.projects.filter(x => x.id !== id);
+  if (currentProjectId === id) currentProjectId = null;
+  save(); renderAll();
+}
+
+function setItemProject(id, type, projectId) {
+  const item = findItem(id, type);
+  if (!item) return;
+  item.projectId = projectId || null;
+  save(); renderAll();
+  const p = projectById(projectId);
+  toast(p ? `Asignada a 📁 ${p.name}` : 'Quitada del proyecto', 'success');
+}
+
+function openProject(id) {
+  currentProjectId = id;
+  showView('projects');
+}
+function closeProject() {
+  currentProjectId = null;
+  renderProjects();
+}
+
+function projectStats(p) {
+  const tasks = state.tasks.filter(t => t.projectId === p.id);
+  const events = state.events.filter(e => e.projectId === p.id);
+  const all = [...tasks, ...events];
+  const done = all.filter(x => x.done).length;
+  const ms = all.reduce((a, x) => a + (x.totalMs || 0), 0)
+    + (state.activeTimer && all.some(x => x.id === state.activeTimer.id) ? getElapsed(state.activeTimer) : 0);
+  const overdue = tasks.filter(t => !t.done && t.due && t.due < today()).length;
+  return { tasks, events, total: all.length, done, pending: all.length - done, ms, overdue,
+           pct: all.length ? Math.round(done / all.length * 100) : 0 };
+}
+
+function renderProjects() {
+  const grid = document.getElementById('projectGrid');
+  const detail = document.getElementById('projectDetail');
+  if (!grid || !detail) return;
+  const count = document.getElementById('projectCount');
+  if (count) count.textContent = activeProjects().length;
+
+  const p = projectById(currentProjectId);
+  document.getElementById('projectListHead').style.display = p ? 'none' : '';
+  grid.style.display = p ? 'none' : '';
+  detail.style.display = p ? '' : 'none';
+
+  if (!p) {
+    const showArchived = document.getElementById('projectShowArchived')?.checked;
+    const list = state.projects
+      .filter(x => showArchived || x.status !== 'archived')
+      .sort((a, b) => (a.status === 'archived') - (b.status === 'archived') || (a.name || '').localeCompare(b.name || ''));
+    grid.innerHTML = list.length ? list.map(x => {
+      const st = projectStats(x);
+      const col = projectColor(x);
+      const dueTxt = x.due ? `<span class="task-due ${x.due < today() && st.pending ? 'overdue' : ''}">🎯 ${fmtDate(x.due)}</span>` : '';
+      return `
+      <div class="project-card ${x.status === 'archived' ? 'archived' : ''}" style="--pc:${col}" onclick="openProject('${x.id}')">
+        <div class="project-card-head">
+          <span class="project-dot"></span>
+          <div class="project-name">${esc(x.name)}</div>
+          ${x.status === 'archived' ? '<span class="tag tag-done">Archivado</span>' : ''}
+        </div>
+        ${x.notes ? `<div class="project-notes">${esc(x.notes)}</div>` : ''}
+        <div class="project-progress"><div style="width:${st.pct}%"></div></div>
+        <div class="project-meta">
+          <span>${st.done}/${st.total} hechas · ${st.pct}%</span>
+          <span>⏱ ${fmtMs(st.ms)}</span>
+        </div>
+        <div class="project-meta">
+          ${st.overdue ? `<span style="color:var(--red)">⚠ ${st.overdue} vencida${st.overdue > 1 ? 's' : ''}</span>` : '<span></span>'}
+          ${dueTxt}
+        </div>
+      </div>`;
+    }).join('') : `<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📁</div>Todavía no hay proyectos.<br><br><button class="btn btn-accent" onclick="openNewProjectModal()">+ Crear el primero</button></div>`;
+    return;
+  }
+
+  const st = projectStats(p);
+  const col = projectColor(p);
+  const filter = document.getElementById('projectTaskFilter')?.value || 'pending';
+  const sortItems = arr => arr.sort((a, b) => (a.item.done - b.item.done) || ((a.item.due || a.item.date || '') < (b.item.due || b.item.date || '') ? -1 : 1));
+  let items = sortItems([...st.tasks.map(item => ({ item, type: 'task' })), ...st.events.map(item => ({ item, type: 'event' }))]);
+  if (filter === 'pending') items = items.filter(e => !e.item.done);
+  if (filter === 'done') items = items.filter(e => e.item.done);
+
+  detail.innerHTML = `
+    <button class="btn btn-sm" onclick="closeProject()">← Proyectos</button>
+    <div class="project-hero" style="--pc:${col}">
+      <div class="project-hero-main">
+        <div class="project-card-head"><span class="project-dot"></span><div class="project-hero-name">${esc(p.name)}</div>
+          ${p.status === 'archived' ? '<span class="tag tag-done">Archivado</span>' : ''}</div>
+        ${p.notes ? `<div class="project-notes" style="-webkit-line-clamp:unset">${esc(p.notes)}</div>` : ''}
+        <div class="project-progress" style="margin-top:12px"><div style="width:${st.pct}%"></div></div>
+        <div class="project-meta">
+          <span>${st.done}/${st.total} hechas · ${st.pct}%</span>
+          <span>⏱ ${fmtMs(st.ms)} invertido</span>
+          ${p.due ? `<span>🎯 Entrega ${fmtDate(p.due)}</span>` : ''}
+        </div>
+      </div>
+      <div class="project-hero-actions">
+        <button class="btn btn-accent btn-sm" onclick="openNewTaskModal('${p.id}')">+ Tarea</button>
+        <button class="btn btn-sm" onclick="openNewProjectModal('${p.id}')">✎ Editar</button>
+        <button class="btn btn-sm" onclick="toggleArchiveProject('${p.id}')">${p.status === 'archived' ? '↺ Reactivar' : '🗄 Archivar'}</button>
+        <button class="btn btn-sm btn-red" onclick="deleteProject('${p.id}')">✕</button>
+      </div>
+    </div>
+    <div class="section-head">
+      <div class="section-title">Tareas del proyecto <span class="count-badge">${items.length}</span></div>
+      <select id="projectTaskFilter" onchange="renderProjects()" style="width:auto;padding:6px 10px;font-size:11px;">
+        <option value="pending" ${filter === 'pending' ? 'selected' : ''}>Pendientes</option>
+        <option value="done" ${filter === 'done' ? 'selected' : ''}>Completadas</option>
+        <option value="all" ${filter === 'all' ? 'selected' : ''}>Todas</option>
+      </select>
+    </div>
+    ${items.length ? items.map(e => renderTaskItem(e.item, e.type)).join('')
+      : `<div class="empty"><div class="empty-icon">📁</div>${filter === 'pending' ? 'No hay tareas pendientes en este proyecto.' : 'Sin tareas.'}<br><span style="font-size:11px">Creá una con "+ Tarea" o asigná una existente desde el menú ⋯ de su tarjeta en el tablero.</span></div>`}`;
+}
+
+function openNewTaskModal(projectId) {
+  fillProjectSelects();
+  document.getElementById('nt-project').value = typeof projectId === 'string' ? projectId : (currentView === 'projects' && currentProjectId) || '';
   document.getElementById('nt-name').value = '';
   document.getElementById('nt-freq').value = 'sinfreq';
   document.getElementById('nt-due').value = today();
@@ -1215,6 +1473,7 @@ function saveNewTask() {
     freq: document.getElementById('nt-freq').value,
     due: document.getElementById('nt-due').value,
     notes: document.getElementById('nt-notes').value,
+    projectId: document.getElementById('nt-project').value || null,
     done: false, totalMs: 0,
     createdAt: new Date().toISOString()
   });
@@ -1234,6 +1493,8 @@ function deleteTask(id) {
 // EVENTS
 // ═══════════════════════════════════════════
 function openNewEventModal() {
+  fillProjectSelects();
+  document.getElementById('ne-project').value = (currentView === 'projects' && currentProjectId) || '';
   document.getElementById('ne-name').value = '';
   document.getElementById('ne-prio').value = 'low';
   document.getElementById('ne-date').value = today();
@@ -1250,6 +1511,7 @@ function saveNewEvent() {
     prio: document.getElementById('ne-prio').value,
     date: document.getElementById('ne-date').value,
     notes: document.getElementById('ne-notes').value,
+    projectId: document.getElementById('ne-project').value || null,
     done: false, totalMs: 0,
     createdAt: new Date().toISOString()
   };
@@ -1381,6 +1643,7 @@ function renderTaskItem(item, type) {
       <div class="task-name" style="${item.done ? 'text-decoration:line-through;opacity:0.5' : ''}">${esc(item.name)}</div>
       <div class="task-info">
         ${typeTag}
+        ${currentView === 'projects' ? '' : projectChip(item.projectId)}
         <span class="task-due ${dueClass(dueStr, item.done)}">${dueLabel(dueStr, item.done)}</span>
         ${item.totalMs > 0 ? `<span class="task-timer-val">⏱ ${totalFmt}</span>` : ''}
       </div>
@@ -1398,7 +1661,9 @@ function renderTasks() {
   const freq = document.getElementById('filterFreq')?.value || '';
   const status = document.getElementById('filterStatus')?.value || '';
   let items = state.tasks;
-  if (freq === 'sinfreq') items = items.filter(t => !t.freq);
+  const projF = document.getElementById('filterProject')?.value || '';
+  if (projF) items = items.filter(t => matchesProjectFilter(t, projF));
+  if (freq === 'sinfreq') items = items.filter(t => !t.freq || t.freq === 'sinfreq');
   else if (freq) items = items.filter(t => t.freq === freq);
   if (status === 'pending') items = items.filter(t => !t.done);
   else if (status === 'done') items = items.filter(t => t.done);
@@ -1449,9 +1714,10 @@ const KCOLS = [
 const BOARD_PREF_KEY = 'workflow_board_prefs';
 let boardPrefs = { scope: 'today', type: 'all', q: '' };
 try { boardPrefs = { ...boardPrefs, ...JSON.parse(localStorage.getItem(BOARD_PREF_KEY) || '{}'), q: '' }; } catch (e) {}
+if (!boardPrefs.project) boardPrefs.project = '';
 
 function saveBoardPrefs() {
-  try { localStorage.setItem(BOARD_PREF_KEY, JSON.stringify({ scope: boardPrefs.scope, type: boardPrefs.type })); } catch (e) {}
+  try { localStorage.setItem(BOARD_PREF_KEY, JSON.stringify({ scope: boardPrefs.scope, type: boardPrefs.type, project: boardPrefs.project })); } catch (e) {}
 }
 
 function addDaysISO(iso, n) {
@@ -1485,6 +1751,7 @@ function boardEntries() {
 
   list = list.filter(({ item, type }) => {
     if (q && !((item.name || '') + ' ' + (item.notes || '')).toLowerCase().includes(q)) return false;
+    if (!matchesProjectFilter(item, boardPrefs.project)) return false;
     const st = itemStatus(item);
     if (st === 'done') {
       const d = dayOf(item.completedAt) || (type === 'task' ? item.due : item.date) || '';
@@ -1553,6 +1820,7 @@ function renderKanbanCard({ item, type }) {
       ${dueStr ? `<span class="task-due ${dueClass(dueStr, item.done)}">${type === 'event' ? fmtDate(dueStr) : dueLabel(dueStr, item.done)}</span>` : ''}
     </div>
     <div class="kcard-title">${esc(item.name)}</div>
+    ${projectChip(item.projectId) ? `<div class="kcard-project">${projectChip(item.projectId)}</div>` : ''}
     ${item.notes ? `<div class="kcard-notes">${esc(item.notes)}</div>` : ''}
     <div class="kcard-foot">
       ${timeHtml}
@@ -1753,6 +2021,12 @@ function openCardMenu(id, type, anchor) {
     <div class="card-menu-sec">Mover a</div>
     ${KCOLS.filter(c => c.id !== st).map(c => `<button data-move="${c.id}">${c.icon} ${c.title}</button>`).join('')}
     <div class="card-menu-sep"></div>
+    <div class="card-menu-sec">Proyecto</div>
+    <select class="card-menu-select" data-project>
+      <option value="">Sin proyecto</option>
+      ${activeProjects().map(p => `<option value="${p.id}" ${p.id === item.projectId ? 'selected' : ''}>📁 ${esc(p.name)}</option>`).join('')}
+    </select>
+    <div class="card-menu-sep"></div>
     <button data-del="1" class="danger">✕ Eliminar</button>`;
   document.body.appendChild(menu);
   const r = anchor.getBoundingClientRect();
@@ -1762,6 +2036,10 @@ function openCardMenu(id, type, anchor) {
   if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
   menu.style.left = Math.max(8, left) + 'px';
   menu.style.top = top + 'px';
+  menu.querySelector('[data-project]').addEventListener('change', e => {
+    closeCardMenu();
+    setItemProject(id, type, e.target.value);
+  });
   menu.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -1913,6 +2191,9 @@ function closeCardMenu() {
   document.getElementById('boardType')?.addEventListener('click', e => {
     const b = e.target.closest('[data-type]'); if (!b) return;
     boardPrefs.type = b.dataset.type; saveBoardPrefs(); renderDashboard();
+  });
+  document.getElementById('boardProject')?.addEventListener('change', e => {
+    boardPrefs.project = e.target.value; saveBoardPrefs(); renderDashboard();
   });
   document.getElementById('boardSearch')?.addEventListener('input', e => {
     boardPrefs.q = e.target.value; renderKanban();
@@ -2181,7 +2462,7 @@ function importJSON(input) {
       if (!data.tasks && !data.log) { toast('Archivo JSON inválido', 'warn'); return; }
       if (!confirm('⚠ Esto reemplaza TODOS los datos actuales. ¿Continuar?')) { input.value = ''; return; }
       state = {
-        tasks: [], events: [], reminders: [], log: [], activeTimer: null,
+        projects: [], tasks: [], events: [], reminders: [], log: [], activeTimer: null,
         ...data
       };
       save(); renderAll();
@@ -2197,7 +2478,7 @@ function importJSON(input) {
 function resetAll() {
   if (!confirm('¿Borrar TODOS los datos permanentemente?')) return;
   if (!confirm('Segunda confirmación: esta acción es irreversible.')) return;
-  state = { tasks: [], events: [], reminders: [], log: [], activeTimer: null };
+  state = { projects: [], tasks: [], events: [], reminders: [], log: [], activeTimer: null };
   save(); renderAll();
   toast('Datos borrados', 'warn');
 }
@@ -2269,6 +2550,7 @@ function spawnNext(item) {
     freq: item.freq,
     due: nextDue,
     notes: item.notes || '',
+    projectId: item.projectId || null,
     done: false,
     totalMs: 0,
     createdAt: new Date().toISOString(),
@@ -2319,6 +2601,7 @@ function toggleDone(id, type) {
       state.tasks.push({
         id: uid(), name: item.name, freq: item.freq,
         due: nextDue, notes: item.notes || '',
+        projectId: item.projectId || null,
         done: false, totalMs: 0,
         createdAt: new Date().toISOString(),
         generatedFrom: item.id
@@ -2405,6 +2688,8 @@ function openDayReport() {
 function renderAll() {
   if (uiBusy) return; // se re-renderiza al soltar la tarjeta
   ensureTicking();
+  fillProjectSelects();
+  renderProjects();
   renderDashboard();
   renderTasks();
   renderEvents();

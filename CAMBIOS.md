@@ -42,3 +42,20 @@ Si no la corrés, la app funciona igual, pero la columna de cada tarjeta se guar
 - El sonido del pomodoro usa una ruta relativa: antes no sonaba en GitHub Pages.
 - El service worker ahora pide primero la red para HTML/JS/CSS, así cada dispositivo recibe la versión nueva sin recargar dos veces.
 - `supabase/schema.sql` se restauró desde el historial de git, ya con las columnas nuevas.
+
+---
+
+# Proyectos
+
+## Paso obligatorio en Supabase (una sola vez)
+Abrí SQL Editor, pegá `supabase/migracion_proyectos.sql` y dale Run. Crea la tabla `projects` y agrega la columna `projectId` a tareas y eventualidades.
+Sin esta migración la app funciona igual, pero los proyectos se guardan solo en el dispositivo donde los creás.
+
+## Qué incluye
+- **Vista Proyectos** (barra lateral y menú "Más" en el celular): tarjetas con color, progreso, tiempo invertido, tareas vencidas y fecha objetivo. Se pueden archivar.
+- **Detalle de un proyecto**: sus tareas y eventualidades, "+ Tarea" con el proyecto ya elegido, editar, archivar y eliminar.
+- **Al eliminar un proyecto** sus tareas no se borran: quedan "sin proyecto".
+- **Elegir proyecto al crear** una tarea o eventualidad.
+- **Asignar una tarea existente** desde el menú ⋯ de su tarjeta en el tablero.
+- **Filtro por proyecto** en el tablero y en la vista Tareas. Las tarjetas muestran un chip con el proyecto, y al tocarlo se abre.
+- **Recurrencias**: la próxima instancia de una tarea hereda su proyecto.
