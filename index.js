@@ -1496,8 +1496,19 @@ function boardEntries() {
   });
 
   const prioRank = { high: 0, medium: 1, low: 2 };
+  const freqRank = { daily: 0, weekly: 1, biweekly: 2, monthly: 3 };
+  const groupRank = ({ item, type }) => type === 'event' ? -1 : (freqRank[item.freq] ?? 9);
+  const isOverdue = ({ item, type }) => type === 'task' && itemStatus(item) !== 'done' && !!item.due && item.due < t;
   const due = e => (e.type === 'task' ? e.item.due : e.item.date) || '9999';
   list.sort((a, b) => {
+    const ga = groupRank(a), gb = groupRank(b);
+    if (ga !== gb) return ga - gb;          // 1º: grupo (frecuencia)
+    const va = isOverdue(a), vb = isOverdue(b);
+    if (va !== vb) return va ? -1 : 1;      // 2º: dentro del grupo, vencidas arriba
+    if (a.type === 'task') {
+      const fa = freqRank[a.item.freq] ?? 9, fb = freqRank[b.item.freq] ?? 9;
+      if (fa !== fb) return fa - fb;
+    }
     const oa = a.item.sortOrder ?? Infinity, ob = b.item.sortOrder ?? Infinity;
     if (oa !== ob) return oa - ob;
     if (a.type !== b.type) return a.type === 'event' ? -1 : 1; // urgencias primero
