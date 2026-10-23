@@ -1201,7 +1201,7 @@ function logSession(id, type, ms) {
 // ═══════════════════════════════════════════
 function openNewTaskModal() {
   document.getElementById('nt-name').value = '';
-  document.getElementById('nt-freq').value = 'daily';
+  document.getElementById('nt-freq').value = 'sinfreq';
   document.getElementById('nt-due').value = today();
   document.getElementById('nt-notes').value = '';
   document.getElementById('newTaskModal').classList.add('open');
@@ -1337,7 +1337,7 @@ function dueLabel(due, done) {
   return fmtDate(due);
 }
 function freqTag(freq) {
-  const map = { daily: ['tag-daily','Diaria'], weekly: ['tag-weekly','Semanal'], biweekly: ['tag-biweekly','Quincenal'], monthly: ['tag-monthly','Mensual'] };
+  const map = { sinfreq: ['tag-sinfreq','Sin frecuencia'], daily: ['tag-daily','Diaria'], weekly: ['tag-weekly','Semanal'], biweekly: ['tag-biweekly','Quincenal'], monthly: ['tag-monthly','Mensual'] };
   const [cls, lbl] = map[freq] || ['',''];
   return `<span class="tag ${cls}">${lbl}</span>`;
 }
@@ -1398,7 +1398,8 @@ function renderTasks() {
   const freq = document.getElementById('filterFreq')?.value || '';
   const status = document.getElementById('filterStatus')?.value || '';
   let items = state.tasks;
-  if (freq) items = items.filter(t => t.freq === freq);
+  if (freq === 'sinfreq') items = items.filter(t => !t.freq);
+  else if (freq) items = items.filter(t => t.freq === freq);
   if (status === 'pending') items = items.filter(t => !t.done);
   else if (status === 'done') items = items.filter(t => t.done);
   else if (status === 'all') { /* mostrar todo */ }
@@ -1496,7 +1497,7 @@ function boardEntries() {
   });
 
   const prioRank = { high: 0, medium: 1, low: 2 };
-  const freqRank = { daily: 0, weekly: 1, biweekly: 2, monthly: 3 };
+  const freqRank = { sinfreq: 1, daily: 0, weekly: 2, biweekly: 3, monthly: 4 };
   const groupRank = ({ item, type }) => type === 'event' ? -1 : (freqRank[item.freq] ?? 9);
   const isOverdue = ({ item, type }) => type === 'task' && itemStatus(item) !== 'done' && !!item.due && item.due < t;
   const due = e => (e.type === 'task' ? e.item.due : e.item.date) || '9999';
@@ -2204,7 +2205,7 @@ function resetAll() {
 // ═══════════════════════════════════════════
 // RECURRENCIAS AUTOMÁTICAS
 // ═══════════════════════════════════════════
-const FREQ_DAYS = { daily: 1, weekly: 7, biweekly: 15, monthly: 30 };
+const FREQ_DAYS = { sinfreq: 0, daily: 1, weekly: 7, biweekly: 15, monthly: 30 };
 
 // Si cae sábado (6) o domingo (0), corre la fecha al lunes siguiente.
 function skipWeekend(d) {
@@ -2337,7 +2338,7 @@ function toggleDone(id, type) {
 // REPORTE POR DÍA
 // ═══════════════════════════════════════════
 function freqLabel(f) {
-  return { daily: 'Diaria', weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual' }[f] || (f || '—');
+  return { sinfreq: 'Sin frecuencia', daily: 'Diaria', weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual' }[f] || (f || '—');
 }
 
 function openDayReport() {
@@ -2810,8 +2811,8 @@ function renderAnalyticsCharts(d) {
   _destroyChart('freq');
   const c4 = document.getElementById('chartFreq');
   if (c4) {
-    const freqLabels = ['Diaria', 'Semanal', 'Quincenal', 'Mensual'];
-    const freqKeys   = ['daily', 'weekly', 'biweekly', 'monthly'];
+    const freqLabels = ['Sin frecuencia', 'Diaria', 'Semanal', 'Quincenal', 'Mensual'];
+    const freqKeys   = ['sinfreq', 'daily', 'weekly', 'biweekly', 'monthly'];
     _charts['freq'] = new Chart(c4, {
       type: 'bar',
       data: {
